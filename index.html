@@ -1575,6 +1575,14 @@ function lerp(a,b,u){return a+(b-a)*u}
 function applyTrack(tr,t,keys){if(!tr.length)return null;if(t<=tr[0].t)return tr[0];if(t>=tr[tr.length-1].t)return tr[tr.length-1];for(let i=0;i<tr.length-1;i++){if(t>=tr[i].t&&t<tr[i+1].t){const u=(t-tr[i].t)/(tr[i+1].t-tr[i].t);const r={};keys.forEach(k=>r[k]=lerp(tr[i][k],tr[i+1][k],u));return r}}return null}
 function applyAnimation(t){objects.forEach(o=>{const tv=applyTrack(o.tracks.translate,t,['x','y']);if(tv){o.x=tv.x;o.y=tv.y}const rv=applyTrack(o.tracks.rotate,t,['rot']);if(rv)o.rot=rv.rot;const sv=applyTrack(o.tracks.scale,t,['scaleX','scaleY']);if(sv){o.scaleX=sv.scaleX;o.scaleY=sv.scaleY}})}
 function draw(){ctx.clearRect(0,0,${cw},${ch});
+// 座標映射：編輯器世界座標 → Canvas 輸出座標
+const baseScale=0.4;
+const frameW=${cw}*baseScale, frameH=${ch}*baseScale;
+const stgW=${stageSize?.w || 600}, stgH=${stageSize?.h || 400};
+const frameFx=stgW/2-frameW/2, frameFy=stgH/2-frameH/2;
+ctx.save();
+ctx.scale(${cw}/frameW, ${ch}/frameH);
+ctx.translate(-frameFx, -frameFy);
 // 預載圖片
 if(!window._imgs){window._imgs={};objects.forEach(o=>{if(o.imgSrc){const img=new Image();img.src=o.imgSrc;window._imgs[o.id]=img}})}
 const imgs=window._imgs;
@@ -1582,7 +1590,8 @@ const imgs=window._imgs;
 const now=performance.now()/1000;
 objects.forEach(o=>{if(o.autoAnim&&o.autoAnim.spin){o.rot+=(o.autoAnim.spinSpeed||90)*Math.PI/180*(1/60)}});
 // 繪製（反向=上層在後畫）
-[...objects].reverse().forEach(o=>{if(o.type==='group')return;const m=getWorldMatrix(o);let dx=0,dy=0;if(o.autoAnim&&o.autoAnim.shake){const str=o.autoAnim.shakeStrength||3,spd=o.autoAnim.shakeSpeed||20;dx=Math.sin(now*spd)*str;dy=Math.cos(now*spd*1.3)*str}ctx.save();ctx.setTransform(m[0],m[1],m[2],m[3],m[4]+dx,m[5]+dy);ctx.translate(-o.pivotX,-o.pivotY);const s=50;ctx.fillStyle=o.color;if(o.type==='image'&&imgs[o.id]){ctx.drawImage(imgs[o.id],-o.imgW/2,-o.imgH/2,o.imgW,o.imgH)}else if(o.type==='box'){ctx.fillRect(-s/2,-s/2,s,s)}else if(o.type==='circle'){ctx.beginPath();ctx.arc(0,0,s/2,0,Math.PI*2);ctx.fill()}if(o.text){ctx.fillStyle='white';ctx.font='bold 13px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(o.text,0,0)}ctx.restore()})}
+[...objects].reverse().forEach(o=>{if(o.type==='group')return;const m=getWorldMatrix(o);let dx=0,dy=0;if(o.autoAnim&&o.autoAnim.shake){const str=o.autoAnim.shakeStrength||3,spd=o.autoAnim.shakeSpeed||20;dx=Math.sin(now*spd)*str;dy=Math.cos(now*spd*1.3)*str}ctx.save();ctx.transform(m[0],m[1],m[2],m[3],m[4]+dx,m[5]+dy);ctx.translate(-o.pivotX,-o.pivotY);const s=50;ctx.fillStyle=o.color;if(o.type==='image'&&imgs[o.id]){ctx.drawImage(imgs[o.id],-o.imgW/2,-o.imgH/2,o.imgW,o.imgH)}else if(o.type==='box'){ctx.fillRect(-s/2,-s/2,s,s)}else if(o.type==='circle'){ctx.beginPath();ctx.arc(0,0,s/2,0,Math.PI*2);ctx.fill()}if(o.text){ctx.fillStyle='white';ctx.font='bold '+(o.fontSize||12)+'px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(o.text,0,0)}ctx.restore()});
+ctx.restore()}
 let start=null;function loop(ts){if(!start)start=ts;const t=((ts-start)/1000)%duration;applyAnimation(t);draw();requestAnimationFrame(loop)}
 requestAnimationFrame(loop);
 <` + `/script></body></html>`;
