@@ -637,43 +637,46 @@ function renderObjectNode(obj, depth) {
     if (listDragId === null || listDragId === obj.id) return;
     if (wouldCycle(listDragId, obj.id)) return;
     e.preventDefault();
-    // 判斷滑鼠在目標的上/中/下
+    e.stopPropagation();
     const rect = item.getBoundingClientRect();
     const y = e.clientY - rect.top;
     const h = rect.height;
     let pos;
-    if (y < h * 0.25) pos = 'before';
-    else if (y > h * 0.75) pos = 'after';
-    else pos = 'inside'; // 進群組
+    if (y < h * 0.3) pos = 'before';
+    else if (y > h * 0.7) pos = 'after';
+    else pos = 'inside';
     if (listDropTargetId !== obj.id || listDropPosition !== pos) {
       listDropTargetId = obj.id; listDropPosition = pos;
       renderObjectList();
     }
   });
-  item.addEventListener('dragleave', () => {
-    if (listDropTargetId === obj.id) { listDropTargetId = null; listDropPosition = null; renderObjectList(); }
-  });
   item.addEventListener('drop', (e) => {
     e.preventDefault();
-    if (listDragId === null || listDragId === obj.id || wouldCycle(listDragId, obj.id)) { listDragId = null; listDropTargetId = null; listDropPosition = null; return; }
+    e.stopPropagation();
+    if (listDragId === null || listDragId === obj.id) { listDragId = null; listDropTargetId = null; listDropPosition = null; return; }
+    if (wouldCycle(listDragId, obj.id)) { listDragId = null; listDropTargetId = null; listDropPosition = null; return; }
+
     const dragObj = getObj(listDragId);
-    if (!dragObj) return;
+    if (!dragObj) { listDragId = null; listDropTargetId = null; listDropPosition = null; return; }
 
     if (listDropPosition === 'inside') {
-      // 進群組
+      // 進群組（用 setParent 保持 world transform）
       setParent(listDragId, obj.id);
     } else {
       // 插入到同層級的前面或後面
-      const targetParentId = obj.parentId;
-      // 先從原位置移除
+      // 先解除原 parent 關係（不做 transform 補償，直接改 parentId）
+      dragObj.parentId = obj.parentId;
+      // 從 objects 陣列移除
       const oldIdx = objects.indexOf(dragObj);
-      objects.splice(oldIdx, 1);
-      // 設定新 parent
-      dragObj.parentId = targetParentId;
-      // 找到目標在 objects 中的位置
+      if (oldIdx !== -1) objects.splice(oldIdx, 1);
+      // 找到目標位置插入
       const targetIdx = objects.indexOf(obj);
-      const insertIdx = listDropPosition === 'before' ? targetIdx : targetIdx + 1;
-      objects.splice(insertIdx, 0, dragObj);
+      if (targetIdx !== -1) {
+        const insertIdx = listDropPosition === 'before' ? targetIdx : targetIdx + 1;
+        objects.splice(insertIdx, 0, dragObj);
+      } else {
+        objects.push(dragObj);
+      }
       renderObjectList(); draw(); snapshot('reorder');
     }
     listDragId = null; listDropTargetId = null; listDropPosition = null;
