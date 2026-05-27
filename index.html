@@ -24,10 +24,15 @@
 
 <div class="stage-wrap">
   <canvas id="stage"></canvas>
-  <div class="stage-hud">
-    <span class="key">Q</span> Move ・ <span class="key">W</span> Rotate ・ <span class="key">E</span> Scale ・ <span class="key">P</span> Pivot<br>
-    <span class="key">Shift</span> = 等比 / 15°鎖 ・ <span class="key">Ctrl+Z</span> Undo ・ <span class="key">Ctrl+Shift+Z</span> Redo<br>
-    雙擊 = 編輯文字 ・ <span class="key">Delete</span> 刪除 ・ <span class="key">Space</span> 播放
+  <div class="help-panel" id="helpPanel">
+    <div class="help-title">Object Animation Tool <span class="help-toggle">[H] 收合</span></div>
+    <div class="help-body" id="helpBody">
+      <b>Transform</b> Q Move ・ W Rotate ・ E Scale ・ P Pivot<br>
+      <b>修飾</b> Shift=等比/15°鎖 ・ Alt+拖=平移 ・ 滾輪=縮放<br>
+      <b>動畫</b> F2=Record ・ F3=Auto Key ・ Space=Play<br>
+      <b>編輯</b> 雙擊=文字 ・ Del=刪除 ・ Ctrl+Z/Y=Undo/Redo<br>
+      <b>匯入</b> 拖放 PNG/PSD 到舞台 ・ Shift+Click=多選<br>
+    </div>
   </div>
   <div class="canvas-size-bar" id="canvasSizeBar">
     <button class="cs-btn active" data-ratio="16:9">16:9</button>
@@ -2086,6 +2091,7 @@ window.addEventListener('keydown', (e) => {
   if (e.key===' ') { e.preventDefault(); if(!recording) togglePlay(); }
   if (e.key==='F2') { e.preventDefault(); recordBtn.click(); }
   if (e.key==='F3') { e.preventDefault(); autoKeyBtn.click(); }
+  if (e.key==='h'||e.key==='H') { document.getElementById('helpPanel').classList.toggle('collapsed'); }
 });
 window.addEventListener('keyup', (e) => { if (e.key==='Shift') shiftHeld=false; });
 
