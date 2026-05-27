@@ -1,10 +1,11 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
 <meta charset="UTF-8">
 <title>物件模擬動畫</title>
 <link rel="stylesheet" href="style.css">
 <script src="psd.min.js"></script>
+<script src="mp4-muxer.min.js"></script>
 </head>
 <body>
 
@@ -57,6 +58,10 @@
       <div class="prop-row"><span class="prop-label">ScaleY</span><input class="prop-input" id="propSY" type="number" step="0.05" min="0.05"></div>
     </div>
     <div class="prop-section">
+      <div class="prop-section-title">Text</div>
+      <div class="prop-row"><span class="prop-label">Size</span><input class="prop-input" id="propFontSize" type="number" value="12" min="4" max="200" step="1"><span style="color:#666;font-size:10px;margin-left:4px">pt</span></div>
+    </div>
+    <div class="prop-section">
       <div class="prop-section-title">Auto Animation</div>
       <label class="prop-checkbox"><input type="checkbox" id="autoShake"> 震動 (Shake)</label>
       <div class="prop-row" id="shakeOpts" style="display:none;margin-top:6px">
@@ -91,6 +96,8 @@
     <input type="file" id="importFileInput" accept=".json" style="display:none">
     <button class="tl-btn" id="exportBtn" disabled>Export JSON</button>
     <button class="tl-btn" id="exportHtmlBtn" disabled>Export HTML</button>
+    <button class="tl-btn" id="exportVideoBtn" disabled>🎬 Video</button>
+    <button class="tl-btn" id="clearSelectedBtn">Clear Selected</button>
     <div class="tl-info">Time<span id="timeReadout">0.00s</span> / <span id="durationReadout">0.00s</span></div>
   </div>
   <div class="tl-track-wrap">
@@ -350,6 +357,7 @@ function addObject(type, opts) {
     imgEl: null,                    // 載入後的 Image element（不序列化）
     imgW: opts?.imgW || 50,
     imgH: opts?.imgH || 50,
+    fontSize: 12, // 文字大小 (pt)
   };
   // 如果有圖片來源，預載
   if (obj.imgSrc) {
@@ -777,7 +785,7 @@ function draw() {
     if (obj.text && editingTextId !== obj.id) {
       sCtx.save();
       sCtx.fillStyle = 'white';
-      sCtx.font = 'bold 13px -apple-system, sans-serif';
+      sCtx.font = `bold ${obj.fontSize || 12}px -apple-system, sans-serif`;
       sCtx.textAlign = 'center'; sCtx.textBaseline = 'middle';
       sCtx.shadowColor = 'rgba(0,0,0,0.6)'; sCtx.shadowBlur = 3;
       const lines = obj.text.split('\n');
@@ -1158,7 +1166,7 @@ function stopRecording() {
   stopBtn.disabled = true;
   recomputeMaxDuration();
   const hasAny = objects.some(o => o.tracks.translate.length > 0 || o.tracks.rotate.length > 0 || o.tracks.scale.length > 0);
-  playBtn.disabled = !hasAny; exportBtn.disabled = !hasAny; document.getElementById('exportHtmlBtn').disabled = !hasAny;
+  playBtn.disabled = !hasAny; exportBtn.disabled = !hasAny; document.getElementById('exportHtmlBtn').disabled = !hasAny; document.getElementById('exportVideoBtn').disabled = !hasAny;
   renderObjectList(); updateModeIndicator(); draw();
   snapshot('record'); updateUndoUI();
 }
@@ -1496,7 +1504,7 @@ document.getElementById('importFileInput').onchange = (e) => {
       const hasAny = objects.some(o => o.tracks.translate.length > 0 || o.tracks.rotate.length > 0 || o.tracks.scale.length > 0);
       playBtn.disabled = !hasAny;
       exportBtn.disabled = !hasAny;
-      document.getElementById('exportHtmlBtn').disabled = !hasAny;
+      document.getElementById('exportHtmlBtn').disabled = !hasAny; document.getElementById('exportVideoBtn').disabled = !hasAny;
 
       renderObjectList();
       draw();
@@ -1583,6 +1591,130 @@ requestAnimationFrame(loop);
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a'); a.href=url; a.download=`animation-${Date.now()}.html`; a.click();
   URL.revokeObjectURL(url);
+};
+
+// ============================================================
+// Export Video (MP4) — 用 VideoEncoder + mp4-muxer
+// ============================================================
+document.getElementById('exportVideoBtn').onclick = async () => {
+  if (typeof Mp4Muxer === 'undefined') { alert('mp4-muxer 未載入'); return; }
+  if (typeof VideoEncoder === 'undefined') { alert('你的瀏覽器不支援 VideoEncoder API（需要 Chrome 94+）'); return; }
+
+  const fps = 30;
+  const cw = canvasFrame.w, ch = canvasFrame.h;
+  const dur = maxDuration || 1;
+  const totalFrames = Math.ceil(dur * fps);
+
+  // 建立離屏 canvas（用 Canvas 框的解析度）
+  const offCanvas = document.createElement('canvas');
+  offCanvas.width = cw; offCanvas.height = ch;
+  const offCtx = offCanvas.getContext('2d');
+
+  // 建立 muxer
+  const muxer = new Mp4Muxer.Muxer({
+    target: new Mp4Muxer.ArrayBufferTarget(),
+    video: { codec: 'avc', width: cw, height: ch },
+    fastStart: 'in-memory',
+  });
+
+  // 建立 encoder
+  const encoder = new VideoEncoder({
+    output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+    error: (e) => console.error('VideoEncoder error:', e),
+  });
+  encoder.configure({
+    codec: 'avc1.640028',
+    width: cw, height: ch,
+    bitrate: 5_000_000,
+    framerate: fps,
+  });
+
+  // 計算 Canvas 框在舞台上的位置（跟 drawCanvasFrame 一致）
+  const baseScale = 0.4;
+  const frameW = canvasFrame.w * baseScale;
+  const frameH = canvasFrame.h * baseScale;
+  const frameFx = (stageSize?.w || 600) / 2 - frameW / 2;
+  const frameFy = (stageSize?.h || 400) / 2 - frameH / 2;
+
+  // 逐幀渲染
+  const btn = document.getElementById('exportVideoBtn');
+  btn.textContent = '⏳ 0%'; btn.disabled = true;
+
+  for (let i = 0; i < totalFrames; i++) {
+    const t = i / fps;
+    // 套用動畫
+    applyAnimation(t);
+    // 在離屏 canvas 上繪製（只畫 Canvas 框範圍內的內容）
+    offCtx.clearRect(0, 0, cw, ch);
+    offCtx.save();
+    // 把世界座標映射到離屏 canvas：世界中 frameFx,frameFy 對應離屏 0,0
+    offCtx.scale(cw / frameW, ch / frameH);
+    offCtx.translate(-frameFx, -frameFy);
+
+    // 繪製物件（跟 draw() 類似但簡化）
+    [...objects].reverse().forEach(obj => {
+      if (obj.type === 'group') return;
+      const m = getWorldMatrix(obj);
+      const shake = getShakeOffset(obj);
+      offCtx.save();
+      offCtx.transform(m[0], m[1], m[2], m[3], m[4]+shake.dx, m[5]+shake.dy);
+      offCtx.translate(-obj.pivotX, -obj.pivotY);
+      const size = 50;
+      offCtx.fillStyle = obj.color;
+      if (obj.type === 'image' && obj.imgEl) {
+        offCtx.drawImage(obj.imgEl, -obj.imgW/2, -obj.imgH/2, obj.imgW, obj.imgH);
+      } else if (obj.type === 'box') {
+        offCtx.fillRect(-size/2, -size/2, size, size);
+      } else if (obj.type === 'circle') {
+        offCtx.beginPath(); offCtx.arc(0, 0, size/2, 0, Math.PI*2); offCtx.fill();
+      }
+      if (obj.text) {
+        offCtx.fillStyle = 'white';
+        offCtx.font = `bold ${obj.fontSize || 12}px sans-serif`;
+        offCtx.textAlign = 'center'; offCtx.textBaseline = 'middle';
+        offCtx.fillText(obj.text, 0, 0);
+      }
+      offCtx.restore();
+    });
+    offCtx.restore();
+
+    // 編碼幀
+    const frame = new VideoFrame(offCanvas, { timestamp: i * (1_000_000 / fps) });
+    encoder.encode(frame, { keyFrame: i % 30 === 0 });
+    frame.close();
+
+    // 更新進度
+    if (i % 10 === 0) {
+      btn.textContent = `⏳ ${Math.round(i/totalFrames*100)}%`;
+      await new Promise(r => setTimeout(r, 0)); // 讓 UI 更新
+    }
+  }
+
+  await encoder.flush();
+  muxer.finalize();
+
+  // 下載
+  const buf = muxer.target.buffer;
+  const blob = new Blob([buf], { type: 'video/mp4' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = `animation-${Date.now()}.mp4`; a.click();
+  URL.revokeObjectURL(url);
+
+  btn.textContent = '🎬 Video'; btn.disabled = false;
+};
+
+// ============================================================
+// Clear Selected Track — 清除選中物件的軌道
+// ============================================================
+document.getElementById('clearSelectedBtn').onclick = () => {
+  const obj = getSelected();
+  if (!obj) { alert('請先選擇物件'); return; }
+  const totalKeys = obj.tracks.translate.length + obj.tracks.rotate.length + obj.tracks.scale.length;
+  if (totalKeys === 0) { alert('該物件沒有動畫軌道'); return; }
+  obj.tracks = { translate: [], rotate: [], scale: [] };
+  recomputeMaxDuration();
+  renderObjectList(); draw();
+  snapshot('clear selected track');
 };
 
 // ============================================================
@@ -1729,6 +1861,7 @@ function updatePropertiesPanel() {
   propRot.value = (obj.rot * 180 / Math.PI).toFixed(1);
   propSX.value = obj.scaleX.toFixed(2);
   propSY.value = obj.scaleY.toFixed(2);
+  document.getElementById('propFontSize').value = obj.fontSize || 12;
 
   // Auto animation state
   const auto = obj.autoAnim || {};
@@ -1755,6 +1888,15 @@ function updatePropertiesPanel() {
     snapshot('prop edit');
   };
 });
+
+// Font size
+document.getElementById('propFontSize').onchange = () => {
+  const obj = getSelected();
+  if (!obj) return;
+  obj.fontSize = Math.max(4, parseInt(document.getElementById('propFontSize').value) || 12);
+  draw();
+  snapshot('font size');
+};
 
 // Auto animation toggles
 autoShake.onchange = () => {
