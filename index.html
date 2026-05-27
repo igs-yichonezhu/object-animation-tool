@@ -1,0 +1,2117 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<title>物件模擬動畫</title>
+<link rel="stylesheet" href="style.css">
+<script src="psd.min.js"></script>
+</head>
+<body>
+
+<div class="sidebar">
+  <div class="sidebar-header">
+    <div class="sidebar-title"><span>Hierarchy</span><span class="hint">拖物件 → 另一物件 = 設父子</span></div>
+    <div class="add-btns">
+      <button class="add-btn" id="addBoxBtn">+ Box</button>
+      <button class="add-btn" id="addCircleBtn">+ Circle</button>
+      <button class="add-btn" id="addGroupBtn">+ Group</button>
+      <button class="add-btn" id="importPsdBtn">📂 PSD</button>
+      <input type="file" id="psdFileInput" accept=".psd" style="display:none">
+    </div>
+  </div>
+  <div class="object-list" id="objectList"></div>
+</div>
+
+<div class="stage-wrap">
+  <canvas id="stage"></canvas>
+  <div class="stage-hud">
+    <span class="key">Q</span> Move ・ <span class="key">W</span> Rotate ・ <span class="key">E</span> Scale ・ <span class="key">P</span> Pivot<br>
+    <span class="key">Shift</span> = 等比 / 15°鎖 ・ <span class="key">Ctrl+Z</span> Undo ・ <span class="key">Ctrl+Shift+Z</span> Redo<br>
+    雙擊 = 編輯文字 ・ <span class="key">Delete</span> 刪除 ・ <span class="key">Space</span> 播放
+  </div>
+  <div class="canvas-size-bar" id="canvasSizeBar">
+    <button class="cs-btn active" data-ratio="16:9">16:9</button>
+    <button class="cs-btn" data-ratio="9:16">9:16</button>
+    <button class="cs-btn" data-ratio="1:1">1:1</button>
+    <span class="cs-info" id="canvasInfo">1920×1080</span>
+  </div>
+  <div class="mode-indicator" id="modeIndicator"></div>
+  <div id="textEditor" contenteditable="true" spellcheck="false"></div>
+</div>
+
+<div class="properties" id="propertiesPanel">
+  <div class="prop-header">Properties</div>
+  <div class="prop-empty" id="propEmpty">選擇物件以查看屬性</div>
+  <div id="propContent" style="display:none">
+    <div class="prop-section">
+      <div class="prop-section-title">Transform</div>
+      <div class="prop-row"><span class="prop-label">X</span><input class="prop-input" id="propX" type="number" step="1"></div>
+      <div class="prop-row"><span class="prop-label">Y</span><input class="prop-input" id="propY" type="number" step="1"></div>
+      <div class="prop-row"><span class="prop-label">Rot°</span><input class="prop-input" id="propRot" type="number" step="1"></div>
+      <div class="prop-row"><span class="prop-label">ScaleX</span><input class="prop-input" id="propSX" type="number" step="0.05" min="0.05"></div>
+      <div class="prop-row"><span class="prop-label">ScaleY</span><input class="prop-input" id="propSY" type="number" step="0.05" min="0.05"></div>
+    </div>
+    <div class="prop-section">
+      <div class="prop-section-title">Auto Animation</div>
+      <label class="prop-checkbox"><input type="checkbox" id="autoShake"> 震動 (Shake)</label>
+      <div class="prop-row" id="shakeOpts" style="display:none;margin-top:6px">
+        <span class="prop-label">強度</span><input class="prop-input" id="shakeStrength" type="number" value="3" min="0.5" max="50" step="0.5">
+        <span class="prop-label">速度</span><input class="prop-input" id="shakeSpeed" type="number" value="20" min="1" max="100" step="1">
+      </div>
+      <label class="prop-checkbox" style="margin-top:8px"><input type="checkbox" id="autoSpin"> 自動旋轉 (Spin)</label>
+      <div class="prop-row" id="spinOpts" style="display:none;margin-top:6px">
+        <span class="prop-label">速度°/s</span><input class="prop-input" id="spinSpeed" type="number" value="90" min="-720" max="720" step="10">
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="timeline" id="timelinePanel">
+  <div class="tl-resize-handle" id="tlResizeHandle"></div>
+  <div class="timeline-controls">
+    <button class="tl-btn" id="undoBtn" title="Undo (Ctrl+Z)">↶</button>
+    <button class="tl-btn" id="redoBtn" title="Redo (Ctrl+Shift+Z)">↷</button>
+    <button class="tl-btn record" id="recordBtn">● Record</button>
+    <button class="tl-btn" id="autoKeyBtn" title="Auto Key (F3)">🔑 Auto Key</button>
+    <button class="tl-btn play" id="playBtn" disabled>▶ Play</button>
+    <button class="tl-btn" id="stopBtn" disabled>■ Stop</button>
+    <button class="tl-btn" id="loopBtn">↻ Loop: Off</button>
+    <button class="tl-btn" id="smoothBtn">⌇ Smooth</button>
+    <label class="tl-smooth-label" title="平滑強度">
+      <input type="range" id="smoothSlider" min="1" max="20" value="5" class="tl-slider">
+      <span id="smoothValue">5</span>
+    </label>
+    <button class="tl-btn" id="clearBtn">Clear Tracks</button>
+    <button class="tl-btn" id="importBtn">📂 Import</button>
+    <input type="file" id="importFileInput" accept=".json" style="display:none">
+    <button class="tl-btn" id="exportBtn" disabled>Export JSON</button>
+    <button class="tl-btn" id="exportHtmlBtn" disabled>Export HTML</button>
+    <div class="tl-info">Time<span id="timeReadout">0.00s</span> / <span id="durationReadout">0.00s</span></div>
+  </div>
+  <div class="tl-track-wrap">
+    <canvas id="tlTrack" class="tl-track"></canvas>
+    <div class="tl-empty-hint" id="emptyHint">尚無動畫 — Record 後拖動物件開始錄製</div>
+  </div>
+  <div class="tl-zoom-bar">
+    <span class="tl-zoom-label">⏱</span>
+    <input type="range" id="tlZoomSlider" min="1" max="120" value="30" class="tl-zoom-slider">
+    <span class="tl-zoom-value" id="tlZoomValue">30s</span>
+  </div>
+</div>
+
+<!--
+  開發時各模組在 js/ 資料夾中分離維護。
+  此處為合併後的執行版本，可直接用 file:// 開啟。
+  如需透過 HTTP server 使用模組版，改用：
+  <script type="module" src="js/main.js"></script>
+-->
+<script>
+// ============================================================
+// constants.js — 共用常數
+// ============================================================
+const COLORS = ['#3498db', '#e74c3c', '#f39c12', '#9b59b6', '#2ecc71', '#e67e22', '#1abc9c'];
+const HANDLE_HIT_RADIUS = 10;
+const ROTATE_BAND_INNER = 6;
+const ROTATE_BAND_OUTER = 22;
+const HISTORY_LIMIT = 50;
+
+// ============================================================
+// state.js — 全域共享狀態
+// ============================================================
+let objects = [];
+let nextId = 1;
+let selectedId = null;
+let selectedIds = new Set(); // 多選
+
+let recording = false;
+let recordArmed = false;
+let recordAccumTime = 0;
+let recordSegmentStart = 0;
+let recordingObjectId = null;
+let recordedObjectsThisSession = new Set();
+
+let playing = false;
+let playStartTime = 0;
+let playStartOffset = 0;
+let currentTime = 0;
+let maxDuration = 0;
+let loopEnabled = false;
+
+let dragMode = null;
+let dragStartX = 0, dragStartY = 0;
+let dragObjStart = null;
+let transformMode = 'move';
+let editingTextId = null;
+
+let listDragId = null;
+let listDropTargetId = null;
+let shiftHeld = false;
+
+// 舞台平移/縮放（無限畫布）
+let panX = 0, panY = 0;
+let stageZoom = 1;
+let isPanning = false;
+let panStartX = 0, panStartY = 0;
+let panStartPanX = 0, panStartPanY = 0;
+
+// Auto Key 模式
+let autoKeyMode = false;
+const AUTO_KEY_DURATION = 30; // 預設 30 秒 timeline
+
+// Loop 播放範圍（bracket）
+let loopRangeStart = 0;
+let loopRangeEnd = 30;
+let loopRangeEnabled = false;
+
+// ============================================================
+// history.js — Undo / Redo 快照式
+// ============================================================
+let history = [];
+let historyIndex = -1;
+
+function snapshot(label) {
+  if (recording || playing) return;
+  history = history.slice(0, historyIndex + 1);
+  history.push({
+    label: label || 'edit',
+    objects: JSON.parse(JSON.stringify(objects)),
+    nextId,
+    selectedId
+  });
+  if (history.length > HISTORY_LIMIT) {
+    history.shift();
+  } else {
+    historyIndex++;
+  }
+  updateUndoUI();
+}
+
+function restoreSnapshot(snap) {
+  objects = JSON.parse(JSON.stringify(snap.objects));
+  nextId = snap.nextId;
+  selectedId = snap.selectedId;
+  selectedIds = new Set(selectedId ? [selectedId] : []);
+  // 重新載入圖片（imgEl 無法序列化，JSON.parse 後為 null）
+  objects.forEach(obj => {
+    obj.imgEl = null; // 確保清除
+    if (obj.imgSrc) {
+      const target = obj; // 閉包安全引用
+      const img = new Image();
+      img.onload = () => { target.imgEl = img; draw(); };
+      img.src = obj.imgSrc;
+    }
+  });
+  recomputeMaxDuration();
+  if (editingTextId !== null) {
+    textEditor.style.display = 'none';
+    textEditor.textContent = '';
+    editingTextId = null;
+  }
+  renderObjectList();
+  draw();
+  updateUndoUI();
+}
+
+function undo() {
+  if (recording || playing) return;
+  if (historyIndex <= 0) return;
+  historyIndex--;
+  restoreSnapshot(history[historyIndex]);
+}
+function redo() {
+  if (recording || playing) return;
+  if (historyIndex >= history.length - 1) return;
+  historyIndex++;
+  restoreSnapshot(history[historyIndex]);
+}
+
+function updateUndoUI() {
+  const undoBtn = document.getElementById('undoBtn');
+  const redoBtn = document.getElementById('redoBtn');
+  if (undoBtn) undoBtn.disabled = historyIndex <= 0 || recording || playing;
+  if (redoBtn) redoBtn.disabled = historyIndex >= history.length - 1 || recording || playing;
+}
+
+// ============================================================
+// DOM
+// ============================================================
+const stage = document.getElementById('stage');
+const sCtx = stage.getContext('2d');
+const tlTrack = document.getElementById('tlTrack');
+const tCtx = tlTrack.getContext('2d');
+const objectList = document.getElementById('objectList');
+const modeIndicator = document.getElementById('modeIndicator');
+const emptyHint = document.getElementById('emptyHint');
+const textEditor = document.getElementById('textEditor');
+const recordBtn = document.getElementById('recordBtn');
+const playBtn = document.getElementById('playBtn');
+const stopBtn = document.getElementById('stopBtn');
+const clearBtn = document.getElementById('clearBtn');
+const exportBtn = document.getElementById('exportBtn');
+const loopBtn = document.getElementById('loopBtn');
+const timeReadout = document.getElementById('timeReadout');
+const durationReadout = document.getElementById('durationReadout');
+
+// ============================================================
+// math.js — Canvas 設定 + 2D 矩陣運算
+// ============================================================
+function setupCanvas(canvas, ctx) {
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.scale(dpr, dpr);
+  return { w: rect.width, h: rect.height };
+}
+let stageSize, tlSize;
+function resizeAll() {
+  stageSize = setupCanvas(stage, sCtx);
+  tlSize = setupCanvas(tlTrack, tCtx);
+  draw();
+}
+window.addEventListener('resize', resizeAll);
+requestAnimationFrame(resizeAll);
+
+function makeLocalMatrix(obj) {
+  const cos = Math.cos(obj.rot), sin = Math.sin(obj.rot);
+  return [
+    cos * obj.scaleX, sin * obj.scaleX,
+    -sin * obj.scaleY, cos * obj.scaleY,
+    obj.x, obj.y
+  ];
+}
+function mulMatrix(m1, m2) {
+  const [a1,b1,c1,d1,tx1,ty1] = m1;
+  const [a2,b2,c2,d2,tx2,ty2] = m2;
+  return [
+    a1*a2+c1*b2, b1*a2+d1*b2,
+    a1*c2+c1*d2, b1*c2+d1*d2,
+    a1*tx2+c1*ty2+tx1, b1*tx2+d1*ty2+ty1
+  ];
+}
+function invMatrix(m) {
+  const [a,b,c,d,tx,ty] = m;
+  const det = a*d - b*c;
+  if (Math.abs(det) < 1e-10) return [1,0,0,1,0,0];
+  const inv = 1/det;
+  return [d*inv,-b*inv,-c*inv,a*inv,(c*ty-d*tx)*inv,(b*tx-a*ty)*inv];
+}
+function applyMatrix(m, x, y) {
+  const [a,b,c,d,tx,ty] = m;
+  return { x: a*x+c*y+tx, y: b*x+d*y+ty };
+}
+function getWorldMatrix(obj) {
+  const local = makeLocalMatrix(obj);
+  if (obj.parentId === null) return local;
+  const parent = getObj(obj.parentId);
+  if (!parent) return local;
+  return mulMatrix(getWorldMatrix(parent), local);
+}
+function getWorldTranslate(obj) {
+  const m = getWorldMatrix(obj);
+  return { tx: m[4], ty: m[5] };
+}
+function decomposeMatrix(m) {
+  const [a,b,c,d,tx,ty] = m;
+  const scaleX = Math.sqrt(a*a+b*b)*(a<0?-1:1);
+  const scaleY = Math.sqrt(c*c+d*d)*(d<0?-1:1);
+  const rot = Math.atan2(b, a);
+  return { scaleX, scaleY, rot, tx, ty };
+}
+
+// ============================================================
+// objects.js — 物件管理
+// ============================================================
+function addObject(type, opts) {
+  const cx = (stageSize?.w || 600) / 2;
+  const cy = (stageSize?.h || 400) / 2;
+  const id = nextId++;
+  const obj = {
+    id, type,
+    name: opts?.name || (type === 'box' ? `Box ${id}` : type === 'circle' ? `Circle ${id}` : type === 'group' ? `Group ${id}` : `Image ${id}`),
+    text: (type === 'image' || type === 'group') ? '' : (type === 'box' ? `Box ${id}` : `Circle ${id}`),
+    parentId: null,
+    x: opts?.x ?? (cx + (Math.random()-0.5)*120),
+    y: opts?.y ?? (cy + (Math.random()-0.5)*120),
+    rot: 0, scaleX: 1, scaleY: 1,
+    pivotX: 0, pivotY: 0,
+    color: COLORS[(id-1) % COLORS.length],
+    tracks: { translate: [], rotate: [], scale: [] },
+    // 圖片專用
+    imgSrc: opts?.imgSrc || null,  // base64 data URL
+    imgEl: null,                    // 載入後的 Image element（不序列化）
+    imgW: opts?.imgW || 50,
+    imgH: opts?.imgH || 50,
+  };
+  // 如果有圖片來源，預載
+  if (obj.imgSrc) {
+    const img = new Image();
+    img.onload = () => { obj.imgEl = img; draw(); };
+    img.src = obj.imgSrc;
+  }
+  objects.push(obj);
+  selectedId = obj.id;
+  renderObjectList();
+  draw();
+  snapshot('add ' + type);
+  return obj;
+}
+
+function addImageObject(file, dropX, dropY) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const dataUrl = e.target.result;
+    const img = new Image();
+    img.onload = () => {
+      // 限制顯示大小（最大 200px 邊）
+      const maxDim = 200;
+      const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+      const w = img.width * scale;
+      const h = img.height * scale;
+      const obj = addObject('image', {
+        name: file.name.replace(/\.[^.]+$/, ''),
+        x: dropX ?? (stageSize?.w || 600) / 2,
+        y: dropY ?? (stageSize?.h || 400) / 2,
+        imgSrc: dataUrl,
+        imgW: w,
+        imgH: h,
+      });
+      obj.imgEl = img;
+      draw();
+    };
+    img.src = dataUrl;
+  };
+  reader.readAsDataURL(file);
+}
+
+function deleteObject(id) {
+  objects.forEach(o => { if (o.parentId === id) o.parentId = null; });
+  objects = objects.filter(o => o.id !== id);
+  if (selectedId === id) selectedId = null;
+  recomputeMaxDuration();
+  renderObjectList();
+  draw();
+  snapshot('delete');
+}
+function getObj(id) { return objects.find(o => o.id === id); }
+function getSelected() { return getObj(selectedId); }
+function getChildren(parentId) { return objects.filter(o => o.parentId === parentId); }
+
+function wouldCycle(childId, newParentId) {
+  let cur = newParentId;
+  while (cur !== null) {
+    if (cur === childId) return true;
+    cur = getObj(cur)?.parentId ?? null;
+  }
+  return false;
+}
+
+function setParent(childId, newParentId) {
+  if (childId === newParentId) return;
+  if (newParentId !== null && wouldCycle(childId, newParentId)) return;
+  const child = getObj(childId);
+  if (!child) return;
+  const worldBefore = getWorldMatrix(child);
+  child.parentId = newParentId;
+  let newLocalMatrix;
+  if (newParentId === null) {
+    newLocalMatrix = worldBefore;
+  } else {
+    const pw = getWorldMatrix(getObj(newParentId));
+    newLocalMatrix = mulMatrix(invMatrix(pw), worldBefore);
+  }
+  const dec = decomposeMatrix(newLocalMatrix);
+  child.x = dec.tx; child.y = dec.ty;
+  child.rot = dec.rot;
+  child.scaleX = dec.scaleX; child.scaleY = dec.scaleY;
+  renderObjectList();
+  draw();
+  snapshot('parent change');
+}
+
+document.getElementById('addBoxBtn').onclick = () => addObject('box');
+document.getElementById('addCircleBtn').onclick = () => addObject('circle');
+document.getElementById('addGroupBtn').onclick = () => addObject('group', { name: `Group ${nextId}` });
+document.getElementById('importPsdBtn').onclick = () => document.getElementById('psdFileInput').click();
+document.getElementById('psdFileInput').onchange = (e) => {
+  const file = e.target.files[0];
+  if (file) importPSD(file);
+  e.target.value = '';
+};
+
+// PSD 匯入
+async function importPSD(file) {
+  if (typeof PSD === 'undefined') { alert('PSD.js 尚未載入'); return; }
+  try {
+    const buffer = await file.arrayBuffer();
+    const psd = new PSD(new Uint8Array(buffer));
+    psd.parse();
+    const tree = psd.tree();
+    const psdW = psd.header.cols || 1920;
+    const psdH = psd.header.rows || 1080;
+
+    function processNode(node, parentId) {
+      if (!node) return;
+      // 跳過根節點本身
+      if (node.type === 'group' || (node.hasChildren && node.hasChildren())) {
+        const groupObj = addObject('group', { name: node.get ? node.get('name') : (node.name || 'Group'), x: 0, y: 0 });
+        groupObj.x = 0; groupObj.y = 0;
+        groupObj.parentId = parentId;
+        const children = node.children ? node.children() : [];
+        // 先處理子節點（用世界座標）
+        const childIds = [];
+        [...children].forEach(child => {
+          const beforeLen = objects.length;
+          processNode(child, groupObj.id);
+          // 記錄新增的子物件 ID
+          for (let i = beforeLen; i < objects.length; i++) {
+            if (objects[i].parentId === groupObj.id) childIds.push(objects[i].id);
+          }
+        });
+        // 計算子物件的 bounding box 中心，設為 Group 位置
+        const directChildren = objects.filter(o => o.parentId === groupObj.id);
+        if (directChildren.length > 0) {
+          let sumX = 0, sumY = 0;
+          directChildren.forEach(c => { sumX += c.x; sumY += c.y; });
+          const centerX = sumX / directChildren.length;
+          const centerY = sumY / directChildren.length;
+          groupObj.x = centerX;
+          groupObj.y = centerY;
+          // 子物件座標改為相對於 Group
+          directChildren.forEach(c => { c.x -= centerX; c.y -= centerY; });
+        }
+      } else {
+        // 圖層
+        try {
+          const name = node.get ? node.get('name') : (node.name || 'Layer');
+          const left = node.get ? node.get('left') : (node.left || 0);
+          const top = node.get ? node.get('top') : (node.top || 0);
+          const width = node.get ? node.get('width') : (node.width || 0);
+          const height = node.get ? node.get('height') : (node.height || 0);
+
+          if (width <= 0 || height <= 0) return; // 空圖層
+
+          // toPng 回傳 Image element with data URL src
+          const pngImg = node.toPng ? node.toPng() : null;
+          if (!pngImg || !pngImg.src) {
+            console.warn('Cannot export layer to PNG:', name);
+            return;
+          }
+
+          const dataUrl = pngImg.src;
+          // 統一比例：PSD 像素 → 舞台像素
+          // Canvas 框顯示尺寸 = canvasFrame.w * 0.4（跟 drawCanvasFrame 的 baseScale 一致）
+          const baseScale = 0.4;
+          const frameW = canvasFrame.w * baseScale;
+          const frameH = canvasFrame.h * baseScale;
+          // PSD 到舞台的縮放比 = Canvas 框顯示寬 / PSD 寬
+          const psdToStage = frameW / psdW;
+          const w = width * psdToStage;
+          const h = height * psdToStage;
+
+          // Canvas 框中心 = 舞台中心
+          const cx = (stageSize?.w || 600) / 2;
+          const cy = (stageSize?.h || 400) / 2;
+          // Canvas 框左上角
+          const frameFx = cx - frameW / 2;
+          const frameFy = cy - frameH / 2;
+          // 圖層中心 = 框左上角 + PSD 座標 * 比例
+          const objX = frameFx + (left + width / 2) * psdToStage;
+          const objY = frameFy + (top + height / 2) * psdToStage;
+
+          const imgObj = addObject('image', {
+            name, x: objX, y: objY,
+            imgSrc: dataUrl, imgW: w, imgH: h,
+          });
+          imgObj.parentId = parentId;
+          const img = new Image();
+          img.onload = () => { imgObj.imgEl = img; draw(); };
+          img.src = dataUrl;
+        } catch(err) {
+          console.warn('Skip layer:', err.message || err);
+        }
+      }
+    }
+
+    const rootChildren = tree.children ? tree.children() : [];
+    [...rootChildren].forEach(child => processNode(child, null));
+
+    renderObjectList();
+    draw();
+    snapshot('import PSD');
+  } catch(err) {
+    alert('PSD 解析失敗: ' + (err.message || err));
+    console.error(err);
+  }
+}
+
+// ============================================================
+// ui.js — 樹狀列表
+// ============================================================
+function renderObjectList() {
+  objectList.innerHTML = '';
+  getChildren(null).forEach(o => renderObjectNode(o, 0));
+}
+function renderObjectNode(obj, depth) {
+  const item = document.createElement('div');
+  item.className = 'object-item' + (selectedIds.has(obj.id) ? ' selected' : '') + (obj.id === listDropTargetId ? ' drop-target' : '');
+  item.style.paddingLeft = (10 + depth*14) + 'px';
+  item.draggable = true;
+
+  if (depth > 0) {
+    const guide = document.createElement('span');
+    guide.style.color = '#444'; guide.style.fontSize = '10px';
+    guide.textContent = '└'; item.appendChild(guide);
+  }
+
+  const icon = document.createElement('div');
+  icon.className = 'object-icon ' + obj.type;
+  if (obj.type === 'image' && obj.imgSrc) {
+    icon.style.background = `url(${obj.imgSrc}) center/cover`;
+  } else if (obj.type === 'group') {
+    icon.style.background = 'transparent';
+    icon.style.border = '1.5px solid ' + obj.color;
+    icon.style.borderRadius = '2px';
+  } else {
+    icon.style.background = obj.color;
+  }
+  item.appendChild(icon);
+
+  const nameInput = document.createElement('input');
+  nameInput.className = 'object-name';
+  nameInput.value = obj.name;
+  nameInput.onchange = (e) => { const n = e.target.value||obj.name; if(obj.name!==n){obj.name=n;snapshot('rename');} };
+  nameInput.onclick = (e) => e.stopPropagation();
+  nameInput.ondblclick = (e) => e.target.select();
+  item.appendChild(nameInput);
+
+  const totalKeys = obj.tracks.translate.length + obj.tracks.rotate.length + obj.tracks.scale.length;
+  if (totalKeys > 0) {
+    const badge = document.createElement('span');
+    badge.className = 'object-track-badge';
+    badge.textContent = totalKeys + 'k';
+    item.appendChild(badge);
+  }
+
+  if (obj.parentId !== null) {
+    const unp = document.createElement('button');
+    unp.className = 'unparent-btn';
+    unp.textContent = '⇧'; unp.title = 'Unparent';
+    unp.onclick = (e) => { e.stopPropagation(); setParent(obj.id, null); };
+    item.appendChild(unp);
+  }
+
+  const del = document.createElement('button');
+  del.className = 'delete-btn';
+  del.textContent = '×';
+  del.onclick = (e) => { e.stopPropagation(); if(confirm(`刪除 ${obj.name}？（子物件會被解除 parent，不一起刪）`)) deleteObject(obj.id); };
+  item.appendChild(del);
+
+  item.onclick = (e) => {
+    if (e.shiftKey) {
+      if (selectedIds.has(obj.id)) { selectedIds.delete(obj.id); if (selectedId === obj.id) selectedId = selectedIds.size > 0 ? [...selectedIds][0] : null; }
+      else { selectedIds.add(obj.id); selectedId = obj.id; }
+    } else {
+      selectedId = obj.id; selectedIds = new Set([obj.id]);
+    }
+    renderObjectList(); draw(); updatePropertiesPanel();
+  };
+
+  item.addEventListener('dragstart', (e) => { listDragId = obj.id; item.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; });
+  item.addEventListener('dragend', () => { listDragId = null; listDropTargetId = null; item.classList.remove('dragging'); renderObjectList(); });
+  item.addEventListener('dragover', (e) => {
+    if (listDragId === null || listDragId === obj.id) return;
+    if (wouldCycle(listDragId, obj.id)) return;
+    e.preventDefault();
+    if (listDropTargetId !== obj.id) { listDropTargetId = obj.id; renderObjectList(); }
+  });
+  item.addEventListener('drop', (e) => {
+    e.preventDefault();
+    if (listDragId !== null && listDragId !== obj.id && !wouldCycle(listDragId, obj.id)) setParent(listDragId, obj.id);
+    listDragId = null; listDropTargetId = null;
+  });
+
+  objectList.appendChild(item);
+  getChildren(obj.id).forEach(c => renderObjectNode(c, depth+1));
+}
+
+objectList.addEventListener('dragover', (e) => { if (listDragId !== null && e.target === objectList) e.preventDefault(); });
+objectList.addEventListener('drop', (e) => { if (listDragId !== null && e.target === objectList) { e.preventDefault(); setParent(listDragId, null); } });
+
+// ============================================================
+// renderer.js — 繪製
+// ============================================================
+// 螢幕座標 ↔ 世界座標轉換（考慮 pan/zoom）
+function screenToWorld(sx, sy) {
+  return {
+    x: (sx - stageSize.w / 2 - panX) / stageZoom + stageSize.w / 2,
+    y: (sy - stageSize.h / 2 - panY) / stageZoom + stageSize.h / 2
+  };
+}
+function worldToScreen(wx, wy) {
+  return {
+    x: (wx - stageSize.w / 2) * stageZoom + stageSize.w / 2 + panX,
+    y: (wy - stageSize.h / 2) * stageZoom + stageSize.h / 2 + panY
+  };
+}
+
+function draw() {
+  if (!stageSize) return;
+  sCtx.clearRect(0, 0, stageSize.w, stageSize.h);
+
+  // 背景格線（固定在螢幕空間，不隨 pan/zoom）
+  sCtx.strokeStyle = '#1f1f1f'; sCtx.lineWidth = 1;
+  const grid = 40;
+  for (let x = grid; x < stageSize.w; x += grid) { sCtx.beginPath(); sCtx.moveTo(x, 0); sCtx.lineTo(x, stageSize.h); sCtx.stroke(); }
+  for (let y = grid; y < stageSize.h; y += grid) { sCtx.beginPath(); sCtx.moveTo(0, y); sCtx.lineTo(stageSize.w, y); sCtx.stroke(); }
+
+  // 套用 pan/zoom transform（之後的繪製都在世界座標）
+  sCtx.save();
+  sCtx.translate(stageSize.w / 2 + panX, stageSize.h / 2 + panY);
+  sCtx.scale(stageZoom, stageZoom);
+  sCtx.translate(-stageSize.w / 2, -stageSize.h / 2);
+
+  objects.forEach(obj => {
+    if (obj.parentId === null) return;
+    const parent = getObj(obj.parentId);
+    if (!parent) return;
+    const pw = getWorldTranslate(parent);
+    const cw = getWorldTranslate(obj);
+    sCtx.strokeStyle = '#3a3a3a'; sCtx.lineWidth = 1;
+    sCtx.setLineDash([3, 3]);
+    sCtx.beginPath(); sCtx.moveTo(pw.tx, pw.ty); sCtx.lineTo(cw.tx, cw.ty); sCtx.stroke();
+    sCtx.setLineDash([]);
+  });
+
+  // 繪製物件（反向：列表越上面 = 越上層 = 最後畫）
+  const drawOrder = [...objects].reverse();
+  const dpr = window.devicePixelRatio || 1;
+  drawOrder.forEach(obj => {
+    const m = getWorldMatrix(obj);
+    const shake = getShakeOffset(obj);
+    sCtx.save();
+    // 用 transform() 而非 setTransform()，保留 pan/zoom context
+    sCtx.transform(m[0], m[1], m[2], m[3], m[4]+shake.dx, m[5]+shake.dy);
+    sCtx.translate(-obj.pivotX, -obj.pivotY);
+    const size = 50;
+    sCtx.fillStyle = obj.color;
+    if (obj.type === 'image') {
+      // 圖片物件
+      if (obj.imgEl) {
+        sCtx.drawImage(obj.imgEl, -obj.imgW/2, -obj.imgH/2, obj.imgW, obj.imgH);
+      } else {
+        // 圖片還沒載入，畫佔位框
+        sCtx.strokeStyle = obj.color; sCtx.lineWidth = 1;
+        sCtx.strokeRect(-obj.imgW/2, -obj.imgH/2, obj.imgW, obj.imgH);
+        sCtx.fillStyle = '#444'; sCtx.font = '10px sans-serif';
+        sCtx.textAlign = 'center'; sCtx.textBaseline = 'middle';
+        sCtx.fillText('loading...', 0, 0);
+      }
+    } else if (obj.type === 'group') {
+      // Group：只在選中時畫十字標記
+      if (obj.id === selectedId) {
+        sCtx.strokeStyle = '#888'; sCtx.lineWidth = 1;
+        sCtx.setLineDash([2,2]);
+        sCtx.beginPath(); sCtx.moveTo(-12,0); sCtx.lineTo(12,0); sCtx.moveTo(0,-12); sCtx.lineTo(0,12); sCtx.stroke();
+        sCtx.setLineDash([]);
+      }
+    } else if (obj.type === 'box') {
+      sCtx.fillRect(-size/2, -size/2, size, size);
+    } else {
+      sCtx.beginPath(); sCtx.arc(0, 0, size/2, 0, Math.PI*2); sCtx.fill();
+    }
+
+
+
+    if (obj.text && editingTextId !== obj.id) {
+      sCtx.save();
+      // 反旋轉：抵消物件自身 + 所有 parent 的累積旋轉
+      const worldM = getWorldMatrix(obj);
+      const worldRot = Math.atan2(worldM[1], worldM[0]);
+      sCtx.rotate(-worldRot);
+      // 反 scale
+      const fx = obj.scaleX !== 0 ? 1/Math.abs(obj.scaleX) : 1;
+      const fy = obj.scaleY !== 0 ? 1/Math.abs(obj.scaleY) : 1;
+      sCtx.scale(fx*Math.sign(obj.scaleX||1), fy*Math.sign(obj.scaleY||1));
+      sCtx.fillStyle = 'white';
+      sCtx.font = 'bold 13px -apple-system, sans-serif';
+      sCtx.textAlign = 'center'; sCtx.textBaseline = 'middle';
+      sCtx.shadowColor = 'rgba(0,0,0,0.6)'; sCtx.shadowBlur = 3;
+      const lines = obj.text.split('\n');
+      const lineH = 15;
+      const totalH = (lines.length-1)*lineH;
+      lines.forEach((line, i) => sCtx.fillText(line, 0, -totalH/2 + i*lineH));
+      sCtx.shadowBlur = 0;
+      sCtx.restore();
+    }
+    sCtx.restore();
+  });
+
+  // 選中框
+  objects.forEach(obj => {
+    if (obj.id !== selectedId && !(recording && obj.id === recordingObjectId)) return;
+    const m = getWorldMatrix(obj);
+    const dpr = window.devicePixelRatio || 1;
+    const size = 50;
+    const corners = [
+      { x: -size/2-obj.pivotX, y: -size/2-obj.pivotY },
+      { x:  size/2-obj.pivotX, y: -size/2-obj.pivotY },
+      { x:  size/2-obj.pivotX, y:  size/2-obj.pivotY },
+      { x: -size/2-obj.pivotX, y:  size/2-obj.pivotY },
+    ];
+    const edges = [
+      { x: -obj.pivotX, y: -size/2-obj.pivotY },
+      { x: size/2-obj.pivotX, y: -obj.pivotY },
+      { x: -obj.pivotX, y: size/2-obj.pivotY },
+      { x: -size/2-obj.pivotX, y: -obj.pivotY },
+    ];
+    const cornersW = corners.map(p => applyMatrix(m, p.x, p.y));
+    const edgesW = edges.map(p => applyMatrix(m, p.x, p.y));
+
+    if (obj.id === selectedId) {
+      const frameColor = { move:'#3fa37a', rotate:'#f39c12', scale:'#9b59b6', pivot:'#f1c40f' }[transformMode];
+      sCtx.save();
+      sCtx.strokeStyle = frameColor; sCtx.lineWidth = 1.2 / stageZoom;
+
+      if (transformMode === 'scale') {
+        sCtx.beginPath(); sCtx.moveTo(cornersW[0].x, cornersW[0].y);
+        for (let i=1;i<4;i++) sCtx.lineTo(cornersW[i].x, cornersW[i].y);
+        sCtx.closePath(); sCtx.stroke();
+        [...cornersW,...edgesW].forEach(pt => { sCtx.fillStyle='white'; sCtx.fillRect(pt.x-4,pt.y-4,8,8); sCtx.strokeStyle=frameColor; sCtx.strokeRect(pt.x-4,pt.y-4,8,8); });
+      } else if (transformMode === 'rotate') {
+        sCtx.save(); sCtx.fillStyle = frameColor+'15';
+        const center = getWorldTranslate(obj);
+        const outerCorners = cornersW.map(p => { const dx=p.x-center.tx,dy=p.y-center.ty; const len=Math.sqrt(dx*dx+dy*dy)||1; return {x:p.x+dx/len*ROTATE_BAND_OUTER,y:p.y+dy/len*ROTATE_BAND_OUTER}; });
+        sCtx.beginPath(); sCtx.moveTo(outerCorners[0].x,outerCorners[0].y); for(let i=1;i<4;i++) sCtx.lineTo(outerCorners[i].x,outerCorners[i].y); sCtx.closePath();
+        sCtx.moveTo(cornersW[0].x,cornersW[0].y); for(let i=1;i<4;i++) sCtx.lineTo(cornersW[i].x,cornersW[i].y); sCtx.closePath();
+        sCtx.fill('evenodd'); sCtx.restore();
+        sCtx.setLineDash([4,3]); sCtx.beginPath(); sCtx.moveTo(cornersW[0].x,cornersW[0].y); for(let i=1;i<4;i++) sCtx.lineTo(cornersW[i].x,cornersW[i].y); sCtx.closePath(); sCtx.stroke(); sCtx.setLineDash([]);
+        cornersW.forEach(pt => { sCtx.beginPath(); sCtx.arc(pt.x,pt.y,8,0,Math.PI*2); sCtx.stroke(); });
+      } else if (transformMode === 'move') {
+        sCtx.beginPath(); sCtx.moveTo(cornersW[0].x,cornersW[0].y); for(let i=1;i<4;i++) sCtx.lineTo(cornersW[i].x,cornersW[i].y); sCtx.closePath(); sCtx.stroke();
+        edgesW.forEach(pt => { const center=getWorldTranslate(obj); const dx=pt.x-center.tx,dy=pt.y-center.ty; const len=Math.sqrt(dx*dx+dy*dy)||1; const ux=dx/len,uy=dy/len; const px=-uy,py=ux; sCtx.fillStyle=frameColor; sCtx.beginPath(); sCtx.moveTo(pt.x+ux*14,pt.y+uy*14); sCtx.lineTo(pt.x+ux*6+px*4,pt.y+uy*6+py*4); sCtx.lineTo(pt.x+ux*6-px*4,pt.y+uy*6-py*4); sCtx.closePath(); sCtx.fill(); });
+      } else if (transformMode === 'pivot') {
+        sCtx.setLineDash([2,4]); sCtx.globalAlpha=0.5; sCtx.beginPath(); sCtx.moveTo(cornersW[0].x,cornersW[0].y); for(let i=1;i<4;i++) sCtx.lineTo(cornersW[i].x,cornersW[i].y); sCtx.closePath(); sCtx.stroke(); sCtx.setLineDash([]); sCtx.globalAlpha=1;
+      }
+      sCtx.restore();
+    }
+
+    if (recording && obj.id === recordingObjectId) {
+      sCtx.save(); sCtx.strokeStyle='#e74c3c'; sCtx.lineWidth=2/stageZoom; sCtx.setLineDash([6/stageZoom,3/stageZoom]);
+      const center=getWorldTranslate(obj); const expanded=cornersW.map(p=>{const dx=p.x-center.tx,dy=p.y-center.ty;const len=Math.sqrt(dx*dx+dy*dy)||1;return{x:p.x+dx/len*10,y:p.y+dy/len*10};});
+      sCtx.beginPath(); sCtx.moveTo(expanded[0].x,expanded[0].y); for(let i=1;i<4;i++) sCtx.lineTo(expanded[i].x,expanded[i].y); sCtx.closePath(); sCtx.stroke(); sCtx.setLineDash([]); sCtx.restore();
+    }
+
+    if (obj.id === selectedId) {
+      sCtx.save();
+      const pivotW = { x: m[4], y: m[5] };
+      if (transformMode === 'pivot') {
+        sCtx.strokeStyle='#1a1a1a'; sCtx.lineWidth=3.5; sCtx.beginPath(); sCtx.arc(pivotW.x,pivotW.y,9,0,Math.PI*2); sCtx.moveTo(pivotW.x-13,pivotW.y); sCtx.lineTo(pivotW.x+13,pivotW.y); sCtx.moveTo(pivotW.x,pivotW.y-13); sCtx.lineTo(pivotW.x,pivotW.y+13); sCtx.stroke();
+        sCtx.strokeStyle='#f1c40f'; sCtx.lineWidth=1.5; sCtx.beginPath(); sCtx.arc(pivotW.x,pivotW.y,9,0,Math.PI*2); sCtx.moveTo(pivotW.x-13,pivotW.y); sCtx.lineTo(pivotW.x+13,pivotW.y); sCtx.moveTo(pivotW.x,pivotW.y-13); sCtx.lineTo(pivotW.x,pivotW.y+13); sCtx.stroke();
+        sCtx.fillStyle='#f1c40f'; sCtx.beginPath(); sCtx.arc(pivotW.x,pivotW.y,2.5,0,Math.PI*2); sCtx.fill();
+      } else {
+        sCtx.fillStyle='#f1c40f'; sCtx.strokeStyle='#1a1a1a'; sCtx.lineWidth=1.5; sCtx.beginPath(); sCtx.arc(pivotW.x,pivotW.y,4,0,Math.PI*2); sCtx.fill(); sCtx.stroke();
+      }
+      sCtx.restore();
+    }
+  });
+
+  // Canvas 輸出範圍框（在世界座標中）
+  drawCanvasFrame();
+
+  // 結束 pan/zoom transform
+  sCtx.restore();
+
+  drawTimeline();
+}
+
+function drawTimeline() {
+  if (!tlSize) return;
+  tCtx.clearRect(0, 0, tlSize.w, tlSize.h);
+  const hasTracks = objects.some(o => o.tracks.translate.length > 0 || o.tracks.rotate.length > 0 || o.tracks.scale.length > 0);
+  emptyHint.style.display = hasTracks || recording || autoKeyMode ? 'none' : 'flex';
+
+  const duration = Math.max(tlViewDuration, currentTime, 1);
+  durationReadout.textContent = duration.toFixed(2) + 's';
+
+  const padTop = 18;
+  tCtx.fillStyle = '#666'; tCtx.font = '10px monospace'; tCtx.textAlign = 'left';
+  const tickInterval = duration > 5 ? 1 : 0.5;
+  for (let t = 0; t <= duration; t += tickInterval) {
+    const x = (t/duration)*tlSize.w;
+    tCtx.strokeStyle = '#2a2a2a'; tCtx.beginPath(); tCtx.moveTo(x,0); tCtx.lineTo(x,tlSize.h); tCtx.stroke();
+    tCtx.fillText(t.toFixed(1)+'s', x+3, 12);
+  }
+
+  // 每個有軌道的物件顯示 3 條子軌（T/R/S）
+  const trackObjs = objects.filter(o => o.tracks.translate.length > 0 || o.tracks.rotate.length > 0 || o.tracks.scale.length > 0);
+  const subTrackH = 5;
+  const objBandH = subTrackH * 3 + 6; // 3 sub-tracks + padding
+  const startY = padTop;
+
+  trackObjs.forEach((obj, i) => {
+    const baseY = startY + i * objBandH;
+    // 物件名稱背景
+    tCtx.fillStyle = obj.color + '12';
+    tCtx.fillRect(0, baseY, tlSize.w, objBandH - 2);
+    tCtx.fillStyle = '#aaa'; tCtx.font = '9px sans-serif';
+    tCtx.fillText(obj.name, 4, baseY + 9);
+
+    const subTracks = [
+      { keys: obj.tracks.translate, color: '#3fa37a', label: 'T' },
+      { keys: obj.tracks.rotate, color: '#f39c12', label: 'R' },
+      { keys: obj.tracks.scale, color: '#9b59b6', label: 'S' },
+    ];
+    subTracks.forEach((st, si) => {
+      const sy = baseY + 12 + si * (subTrackH + 1);
+      // 軌道底色
+      tCtx.fillStyle = st.color + '18';
+      tCtx.fillRect(50, sy, tlSize.w - 50, subTrackH);
+      // label
+      tCtx.fillStyle = st.color; tCtx.font = '8px monospace';
+      tCtx.fillText(st.label, 42, sy + subTrackH - 1);
+      // keyframes
+      st.keys.forEach(k => {
+        const x = (k.t / duration) * (tlSize.w - 50) + 50;
+        tCtx.fillStyle = st.color;
+        tCtx.fillRect(x - 1, sy, 2, subTrackH);
+      });
+    });
+  });
+
+  // Loop range bracket
+  if (loopRangeEnabled) {
+    const lsX = (loopRangeStart / duration) * tlSize.w;
+    const leX = (loopRangeEnd / duration) * tlSize.w;
+    tCtx.fillStyle = 'rgba(63, 163, 122, 0.08)';
+    tCtx.fillRect(lsX, 0, leX - lsX, tlSize.h);
+    tCtx.strokeStyle = '#3fa37a'; tCtx.lineWidth = 2;
+    tCtx.setLineDash([]);
+    // 左括號
+    tCtx.beginPath(); tCtx.moveTo(lsX+6, 0); tCtx.lineTo(lsX, 0); tCtx.lineTo(lsX, tlSize.h); tCtx.lineTo(lsX+6, tlSize.h); tCtx.stroke();
+    // 右括號
+    tCtx.beginPath(); tCtx.moveTo(leX-6, 0); tCtx.lineTo(leX, 0); tCtx.lineTo(leX, tlSize.h); tCtx.lineTo(leX-6, tlSize.h); tCtx.stroke();
+  }
+
+  const playX = (currentTime/duration)*tlSize.w;
+  tCtx.strokeStyle = recording ? '#e74c3c' : '#3fa37a'; tCtx.lineWidth = 2;
+  tCtx.beginPath(); tCtx.moveTo(playX,0); tCtx.lineTo(playX,tlSize.h); tCtx.stroke();
+  tCtx.fillStyle = recording ? '#e74c3c' : '#3fa37a';
+  tCtx.beginPath(); tCtx.moveTo(playX-4,0); tCtx.lineTo(playX+4,0); tCtx.lineTo(playX,6); tCtx.closePath(); tCtx.fill();
+  timeReadout.textContent = currentTime.toFixed(2) + 's';
+}
+
+// ============================================================
+// interaction.js — 命中測試 + 游標
+// ============================================================
+function hitTest(mx, my) {
+  // 優先：已選中的物件（避免誤觸切換）
+  for (const id of selectedIds) {
+    const obj = getObj(id);
+    if (!obj) continue;
+    const m = getWorldMatrix(obj);
+    const local = applyMatrix(invMatrix(m), mx, my);
+    const sx = local.x - obj.pivotX, sy = local.y - obj.pivotY;
+    if (obj.type === 'image') { if (Math.abs(sx) <= obj.imgW/2 && Math.abs(sy) <= obj.imgH/2) return obj; }
+    else if (obj.type === 'group') { if (Math.abs(sx) <= 30 && Math.abs(sy) <= 30) return obj; }
+    else if (obj.type === 'box') { if (Math.abs(sx) <= 25 && Math.abs(sy) <= 25) return obj; }
+    else { if (sx*sx+sy*sy <= 25*25) return obj; }
+  }
+  // 其次：從上層往下找
+  for (let i = 0; i < objects.length; i++) {
+    const obj = objects[i];
+    if (selectedIds.has(obj.id)) continue; // 已檢查過
+    const m = getWorldMatrix(obj);
+    const local = applyMatrix(invMatrix(m), mx, my);
+    const sx = local.x - obj.pivotX, sy = local.y - obj.pivotY;
+    if (obj.type === 'image') { if (Math.abs(sx) <= obj.imgW/2 && Math.abs(sy) <= obj.imgH/2) return obj; }
+    else if (obj.type === 'group') { if (Math.abs(sx) <= 30 && Math.abs(sy) <= 30) return obj; }
+    else if (obj.type === 'box') { if (Math.abs(sx) <= 25 && Math.abs(sy) <= 25) return obj; }
+    else { if (sx*sx+sy*sy <= 25*25) return obj; }
+  }
+  return null;
+}
+
+function getSelectedHandles(obj) {
+  const m = getWorldMatrix(obj);
+  const size = 50;
+  const local = (x,y) => ({x:x-obj.pivotX, y:y-obj.pivotY});
+  const pts = { tl:local(-size/2,-size/2), t:local(0,-size/2), tr:local(size/2,-size/2), r:local(size/2,0), br:local(size/2,size/2), b:local(0,size/2), bl:local(-size/2,size/2), l:local(-size/2,0) };
+  const result = {};
+  for (const k in pts) result[k] = applyMatrix(m, pts[k].x, pts[k].y);
+  return result;
+}
+
+function hitHandle(mx, my, mode) {
+  const obj = getSelected();
+  if (!obj) return null;
+  const handles = getSelectedHandles(obj);
+  if (mode === 'scale') {
+    for (const k of ['tl','t','tr','r','br','b','bl','l']) {
+      const dx=mx-handles[k].x, dy=my-handles[k].y;
+      if (dx*dx+dy*dy <= HANDLE_HIT_RADIUS*HANDLE_HIT_RADIUS) return {obj, handle:k};
+    }
+    return null;
+  }
+  if (mode === 'rotate') {
+    const m = getWorldMatrix(obj);
+    const local = applyMatrix(invMatrix(m), mx, my);
+    const sx = local.x-obj.pivotX, sy = local.y-obj.pivotY;
+    const half = 25;
+    const dx = Math.max(0, Math.abs(sx)-half), dy = Math.max(0, Math.abs(sy)-half);
+    const distOutside = Math.sqrt(dx*dx+dy*dy);
+    const insideDist = Math.max(Math.abs(sx)-half, Math.abs(sy)-half);
+    if (insideDist < 0) { if (-insideDist <= ROTATE_BAND_INNER) return {obj, handle:'rotate'}; return null; }
+    if (distOutside <= ROTATE_BAND_OUTER) return {obj, handle:'rotate'};
+    return null;
+  }
+  return null;
+}
+
+function updateCursor() {
+  stage.classList.remove('cursor-move','cursor-rotate','cursor-scale','cursor-pivot','cursor-scale-h','cursor-scale-v','cursor-scale-ne','cursor-scale-nw','cursor-default');
+  stage.classList.add('cursor-' + transformMode);
+}
+
+function updateHoverCursor(mx, my) {
+  stage.classList.remove('cursor-move','cursor-rotate','cursor-scale','cursor-pivot','cursor-scale-h','cursor-scale-v','cursor-scale-ne','cursor-scale-nw','cursor-default');
+  if (transformMode === 'move' || transformMode === 'pivot') { stage.classList.add('cursor-'+transformMode); return; }
+  const h = hitHandle(mx, my, transformMode);
+  if (!h) { stage.classList.add('cursor-default'); return; }
+  if (transformMode === 'rotate') { stage.classList.add('cursor-rotate'); return; }
+  const obj = h.obj;
+  const m = getWorldMatrix(obj);
+  const worldRot = Math.atan2(m[1], m[0]);
+  const handleKey = h.handle;
+  if (handleKey==='t'||handleKey==='b') { if(isMostlyHorizontalAxis(worldRot+Math.PI/2)) stage.classList.add('cursor-scale-h'); else stage.classList.add('cursor-scale-v'); }
+  else if (handleKey==='l'||handleKey==='r') { if(isMostlyHorizontalAxis(worldRot)) stage.classList.add('cursor-scale-h'); else stage.classList.add('cursor-scale-v'); }
+  else { let baseAngle=(handleKey==='tl'||handleKey==='br')?-Math.PI/4:Math.PI/4; if(isMostlyNwSeDiagonal(baseAngle+worldRot)) stage.classList.add('cursor-scale-nw'); else stage.classList.add('cursor-scale-ne'); }
+}
+
+function isMostlyHorizontalAxis(ang) { const a=Math.abs(((ang%Math.PI)+Math.PI)%Math.PI-Math.PI/2); return a>Math.PI/4; }
+function isMostlyNwSeDiagonal(ang) { const a=((ang%Math.PI)+Math.PI)%Math.PI; return Math.abs(a-3*Math.PI/4)<Math.PI/4; }
+
+function getParentRot(obj) {
+  if (obj.parentId === null) return 0;
+  const pm = getWorldMatrix(getObj(obj.parentId));
+  return Math.atan2(pm[1], pm[0]);
+}
+
+// ============================================================
+// recording.js — 錄製（分軌 + 從當前時間開始）
+// ============================================================
+let recordTimeOffset = 0; // 錄製起始的 timeline 時間偏移
+
+function getRecordTime() {
+  if (recordSegmentStart > 0) return recordTimeOffset + recordAccumTime + (performance.now()-recordSegmentStart)/1000;
+  return recordTimeOffset + recordAccumTime;
+}
+
+function insertKeyframe(track, keyframe) {
+  // 按時間排序插入，覆蓋同時間點附近的 keyframe
+  const t = keyframe.t;
+  // 找到插入位置
+  let insertIdx = track.length;
+  for (let i = 0; i < track.length; i++) {
+    if (Math.abs(track[i].t - t) < 0.008) {
+      // 覆蓋
+      Object.assign(track[i], keyframe);
+      return;
+    }
+    if (track[i].t > t) { insertIdx = i; break; }
+  }
+  track.splice(insertIdx, 0, keyframe);
+}
+
+function captureKeyframe(obj, forceAppend = false) {
+  if (!recording) return;
+  const t = getRecordTime();
+  // 根據當前拖曳模式決定寫入哪條軌
+  const mode = dragMode || transformMode;
+
+  if (mode === 'move') {
+    const track = obj.tracks.translate;
+    const last = track[track.length - 1];
+    if (last && !forceAppend && t - last.t < 0.008) {
+      last.x = obj.x; last.y = obj.y;
+    } else {
+      insertKeyframe(track, { t, x: obj.x, y: obj.y });
+    }
+  } else if (mode === 'rotate') {
+    const track = obj.tracks.rotate;
+    const last = track[track.length - 1];
+    if (last && !forceAppend && t - last.t < 0.008) {
+      last.rot = obj.rot;
+    } else {
+      insertKeyframe(track, { t, rot: obj.rot });
+    }
+  } else if (mode === 'scale') {
+    const track = obj.tracks.scale;
+    const last = track[track.length - 1];
+    if (last && !forceAppend && t - last.t < 0.008) {
+      last.scaleX = obj.scaleX; last.scaleY = obj.scaleY;
+    } else {
+      insertKeyframe(track, { t, scaleX: obj.scaleX, scaleY: obj.scaleY });
+    }
+  }
+
+  if (t > maxDuration) maxDuration = t;
+}
+
+recordBtn.onclick = () => {
+  if (!recording) {
+    recording = true; recordArmed = true;
+    // 從當前 timeline 位置開始錄製
+    recordTimeOffset = currentTime;
+    recordAccumTime = 0; recordSegmentStart = 0;
+    recordingObjectId = null;
+    recordedObjectsThisSession = new Set();
+    recordBtn.textContent = '■ Stop Rec'; recordBtn.classList.add('recording');
+    playBtn.disabled = true; stopBtn.disabled = false; exportBtn.disabled = true;
+    updateUndoUI(); recLoop(); updateModeIndicator();
+  } else stopRecording();
+};
+function recLoop() {
+  if (!recording) return;
+  currentTime = getRecordTime();
+  drawTimeline(); updateModeIndicator();
+  requestAnimationFrame(recLoop);
+}
+function stopRecording() {
+  if (!recording) return;
+  if (recordSegmentStart > 0) { recordAccumTime += (performance.now()-recordSegmentStart)/1000; recordSegmentStart = 0; }
+  recording = false; recordArmed = false; recordingObjectId = null;
+  recordBtn.textContent = '● Record'; recordBtn.classList.remove('recording');
+  stopBtn.disabled = true;
+  recomputeMaxDuration();
+  const hasAny = objects.some(o => o.tracks.translate.length > 0 || o.tracks.rotate.length > 0 || o.tracks.scale.length > 0);
+  playBtn.disabled = !hasAny; exportBtn.disabled = !hasAny; document.getElementById('exportHtmlBtn').disabled = !hasAny;
+  renderObjectList(); updateModeIndicator(); draw();
+  snapshot('record'); updateUndoUI();
+}
+stopBtn.onclick = stopRecording;
+
+// ============================================================
+// Auto Key 模式
+// ============================================================
+const autoKeyBtn = document.getElementById('autoKeyBtn');
+autoKeyBtn.onclick = () => {
+  autoKeyMode = !autoKeyMode;
+  if (autoKeyMode) {
+    autoKeyBtn.classList.add('autokey-active');
+    if (maxDuration < AUTO_KEY_DURATION) maxDuration = AUTO_KEY_DURATION;
+    loopRangeEnd = maxDuration;
+    playBtn.disabled = false;
+    exportBtn.disabled = false;
+    document.getElementById('exportHtmlBtn').disabled = false;
+  } else {
+    autoKeyBtn.classList.remove('autokey-active');
+    recomputeMaxDuration();
+  }
+  draw();
+};
+
+function autoKeyCapture(obj, mode) {
+  if (!autoKeyMode) return;
+  const t = currentTime;
+  if (mode === 'move') {
+    insertKeyframe(obj.tracks.translate, { t, x: obj.x, y: obj.y });
+  } else if (mode === 'rotate') {
+    insertKeyframe(obj.tracks.rotate, { t, rot: obj.rot });
+  } else if (mode === 'scale') {
+    insertKeyframe(obj.tracks.scale, { t, scaleX: obj.scaleX, scaleY: obj.scaleY });
+  }
+  if (t > maxDuration) maxDuration = t;
+  renderObjectList();
+  draw();
+}
+
+// ============================================================
+// playback.js — 播放
+// ============================================================
+function togglePlay() {
+  const hasTracks = objects.some(o => o.tracks.translate.length > 0 || o.tracks.rotate.length > 0 || o.tracks.scale.length > 0);
+  if (!hasTracks && !autoKeyMode) return;
+  if (playing) { playing = false; playBtn.textContent = '▶ Play'; playStartOffset = currentTime; }
+  else {
+    if (currentTime >= maxDuration) currentTime = 0;
+    playing = true; playStartTime = performance.now(); playStartOffset = currentTime;
+    playBtn.textContent = '❚❚ Pause'; playLoop();
+  }
+  updateUndoUI();
+}
+playBtn.onclick = togglePlay;
+
+function playLoop() {
+  if (!playing) return;
+  currentTime = playStartOffset + (performance.now()-playStartTime)/1000;
+  // Loop range bracket
+  const loopEnd = (loopEnabled && loopRangeEnabled) ? loopRangeEnd : maxDuration;
+  const loopStart = (loopEnabled && loopRangeEnabled) ? loopRangeStart : 0;
+  if (currentTime >= loopEnd) {
+    if (loopEnabled) { currentTime = loopStart; playStartTime = performance.now(); playStartOffset = loopStart; }
+    else { currentTime = loopEnd; playing = false; playBtn.textContent = '▶ Play'; updateUndoUI(); }
+  }
+  applyAnimation(currentTime);
+  draw();
+  if (playing) requestAnimationFrame(playLoop);
+}
+
+function applyAnimation(t) {
+  objects.forEach(obj => {
+    // Translate track
+    if (obj.tracks.translate.length > 0) {
+      const tr = obj.tracks.translate;
+      if (t <= tr[0].t) { obj.x = tr[0].x; obj.y = tr[0].y; }
+      else if (t >= tr[tr.length-1].t) { obj.x = tr[tr.length-1].x; obj.y = tr[tr.length-1].y; }
+      else {
+        for (let i = 0; i < tr.length-1; i++) {
+          if (t >= tr[i].t && t < tr[i+1].t) {
+            const u = (t-tr[i].t)/(tr[i+1].t-tr[i].t);
+            obj.x = tr[i].x + (tr[i+1].x-tr[i].x)*u;
+            obj.y = tr[i].y + (tr[i+1].y-tr[i].y)*u;
+            break;
+          }
+        }
+      }
+    }
+    // Rotate track
+    if (obj.tracks.rotate.length > 0) {
+      const tr = obj.tracks.rotate;
+      if (t <= tr[0].t) { obj.rot = tr[0].rot; }
+      else if (t >= tr[tr.length-1].t) { obj.rot = tr[tr.length-1].rot; }
+      else {
+        for (let i = 0; i < tr.length-1; i++) {
+          if (t >= tr[i].t && t < tr[i+1].t) {
+            const u = (t-tr[i].t)/(tr[i+1].t-tr[i].t);
+            obj.rot = tr[i].rot + (tr[i+1].rot-tr[i].rot)*u;
+            break;
+          }
+        }
+      }
+    }
+    // Scale track
+    if (obj.tracks.scale.length > 0) {
+      const tr = obj.tracks.scale;
+      if (t <= tr[0].t) { obj.scaleX = tr[0].scaleX; obj.scaleY = tr[0].scaleY; }
+      else if (t >= tr[tr.length-1].t) { obj.scaleX = tr[tr.length-1].scaleX; obj.scaleY = tr[tr.length-1].scaleY; }
+      else {
+        for (let i = 0; i < tr.length-1; i++) {
+          if (t >= tr[i].t && t < tr[i+1].t) {
+            const u = (t-tr[i].t)/(tr[i+1].t-tr[i].t);
+            obj.scaleX = tr[i].scaleX + (tr[i+1].scaleX-tr[i].scaleX)*u;
+            obj.scaleY = tr[i].scaleY + (tr[i+1].scaleY-tr[i].scaleY)*u;
+            break;
+          }
+        }
+      }
+    }
+  });
+}
+
+tlTrack.addEventListener('mousedown', (e) => {
+  if (recording) return;
+  const startScrub = (clientX) => {
+    const rect = tlTrack.getBoundingClientRect();
+    const u = Math.max(0, Math.min(1, (clientX-rect.left)/rect.width));
+    currentTime = u * Math.max(tlViewDuration, 0.001);
+    playing = false; playBtn.textContent = '▶ Play';
+    applyAnimation(currentTime); draw();
+  };
+  startScrub(e.clientX);
+  const onMove = (ev) => startScrub(ev.clientX);
+  const onUp = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+  window.addEventListener('mousemove', onMove);
+  window.addEventListener('mouseup', onUp);
+});
+
+// Timeline resize handle 拖拉
+const tlResizeHandle = document.getElementById('tlResizeHandle');
+const timelinePanel = document.getElementById('timelinePanel');
+let tlResizing = false, tlResizeStartY = 0, tlResizeStartH = 0;
+
+tlResizeHandle.addEventListener('mousedown', (e) => {
+  e.preventDefault();
+  tlResizing = true;
+  tlResizeStartY = e.clientY;
+  tlResizeStartH = timelinePanel.offsetHeight;
+  document.body.style.cursor = 'ns-resize';
+});
+window.addEventListener('mousemove', (e) => {
+  if (!tlResizing) return;
+  const delta = tlResizeStartY - e.clientY; // 往上拖 = 變高
+  const newH = Math.max(100, Math.min(600, tlResizeStartH + delta));
+  document.body.parentElement.style.setProperty('grid-template-rows', `1fr ${newH}px`);
+  // 重新計算 canvas 大小
+  requestAnimationFrame(() => { resizeAll(); });
+});
+window.addEventListener('mouseup', () => {
+  if (tlResizing) { tlResizing = false; document.body.style.cursor = ''; }
+});
+
+// Timeline zoom slider
+const tlZoomSlider = document.getElementById('tlZoomSlider');
+const tlZoomValue = document.getElementById('tlZoomValue');
+let tlViewDuration = 30; // 可見時間範圍（秒）
+tlZoomSlider.oninput = () => {
+  tlViewDuration = parseFloat(tlZoomSlider.value);
+  tlZoomValue.textContent = tlViewDuration + 's';
+  draw();
+};
+
+function recomputeMaxDuration() {
+  maxDuration = 0;
+  objects.forEach(o => {
+    ['translate','rotate','scale'].forEach(trackName => {
+      const tr = o.tracks[trackName];
+      if (tr.length > 0) {
+        const last = tr[tr.length-1].t;
+        if (last > maxDuration) maxDuration = last;
+      }
+    });
+  });
+  // Auto Key 模式下保持最小 30 秒
+  if (autoKeyMode && maxDuration < AUTO_KEY_DURATION) maxDuration = AUTO_KEY_DURATION;
+  // 同步 loop range end
+  if (loopRangeEnd > maxDuration) loopRangeEnd = maxDuration;
+}
+
+clearBtn.onclick = () => {
+  if (!objects.some(o => o.tracks.translate.length > 0 || o.tracks.rotate.length > 0 || o.tracks.scale.length > 0)) return;
+  if (!confirm('清除所有動畫資料？')) return;
+  objects.forEach(o => { o.tracks = { translate: [], rotate: [], scale: [] }; });
+  maxDuration = 0; currentTime = 0;
+  playBtn.disabled = true; exportBtn.disabled = true; document.getElementById('exportHtmlBtn').disabled = true;
+  renderObjectList(); draw(); snapshot('clear tracks');
+};
+
+loopBtn.onclick = () => {
+  loopEnabled = !loopEnabled;
+  loopRangeEnabled = loopEnabled; // loop 開啟時同時啟用範圍
+  loopBtn.textContent = '↻ Loop: ' + (loopEnabled ? 'On' : 'Off');
+  loopBtn.style.background = loopEnabled ? '#3fa37a' : '';
+  loopBtn.style.color = loopEnabled ? '#0d0d0d' : '';
+  draw();
+};
+
+// ============================================================
+// canvas-frame.js — Canvas 輸出範圍
+// ============================================================
+const CANVAS_PRESETS = {
+  '16:9': { w: 1920, h: 1080 },
+  '9:16': { w: 1080, h: 1920 },
+  '1:1':  { w: 1080, h: 1080 },
+};
+let canvasFrame = { ratio: '16:9', w: 1920, h: 1080 };
+
+document.querySelectorAll('.cs-btn').forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll('.cs-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    const ratio = btn.dataset.ratio;
+    canvasFrame = { ratio, ...CANVAS_PRESETS[ratio] };
+    document.getElementById('canvasInfo').textContent = `${canvasFrame.w}×${canvasFrame.h}`;
+    draw();
+  };
+});
+
+function drawCanvasFrame() {
+  // 在世界座標中心畫 Canvas 框（pan/zoom 已由外層 transform 處理）
+  const baseScale = 0.4;
+  const fw = canvasFrame.w * baseScale;
+  const fh = canvasFrame.h * baseScale;
+  const fx = (stageSize.w - fw) / 2;
+  const fy = (stageSize.h - fh) / 2;
+
+  sCtx.save();
+  sCtx.strokeStyle = '#e74c3c';
+  sCtx.lineWidth = 1.5 / stageZoom; // 線寬不隨縮放變粗
+  sCtx.setLineDash([6 / stageZoom, 4 / stageZoom]);
+  sCtx.strokeRect(fx, fy, fw, fh);
+  sCtx.setLineDash([]);
+  // 四角標記
+  const cornerLen = 12 / stageZoom;
+  const corners = [[fx,fy],[fx+fw,fy],[fx+fw,fy+fh],[fx,fy+fh]];
+  corners.forEach(([cx,cy], i) => {
+    const dirX = (i === 0 || i === 3) ? 1 : -1;
+    const dirY = (i === 0 || i === 1) ? 1 : -1;
+    sCtx.beginPath();
+    sCtx.moveTo(cx + dirX * cornerLen, cy);
+    sCtx.lineTo(cx, cy);
+    sCtx.lineTo(cx, cy + dirY * cornerLen);
+    sCtx.stroke();
+  });
+  // 標籤
+  sCtx.fillStyle = '#e74c3c';
+  const fontSize = Math.max(8, 10 / stageZoom);
+  sCtx.font = `${fontSize}px monospace`;
+  sCtx.textAlign = 'center';
+  sCtx.fillText(`Canvas (${canvasFrame.w}×${canvasFrame.h}  ${canvasFrame.ratio})`, fx + fw/2, fy + fh + 16 / stageZoom);
+  sCtx.restore();
+
+  return { fx, fy, fw, fh, scale: baseScale };
+}
+
+// ============================================================
+// Import JSON — 讀取專案檔
+// ============================================================
+document.getElementById('importBtn').onclick = () => document.getElementById('importFileInput').click();
+document.getElementById('importFileInput').onchange = (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    try {
+      const data = JSON.parse(ev.target.result);
+      if (!data.objects || !Array.isArray(data.objects)) { alert('無效的動畫 JSON 檔案'); return; }
+
+      // 還原 canvas 設定
+      if (data.canvas) {
+        canvasFrame.w = data.canvas.width || 1920;
+        canvasFrame.h = data.canvas.height || 1080;
+        canvasFrame.ratio = data.canvas.ratio || '16:9';
+        document.getElementById('canvasInfo').textContent = `${canvasFrame.w}×${canvasFrame.h}`;
+        document.querySelectorAll('.cs-btn').forEach(b => {
+          b.classList.toggle('active', b.dataset.ratio === canvasFrame.ratio);
+        });
+      }
+
+      // 還原物件
+      objects = data.objects.map(o => ({
+        id: o.id,
+        type: o.type,
+        name: o.name || 'Object',
+        text: o.text || '',
+        parentId: o.parentId ?? null,
+        x: o.initial?.x ?? o.x ?? 0,
+        y: o.initial?.y ?? o.y ?? 0,
+        rot: o.initial?.rot ?? o.rot ?? 0,
+        scaleX: o.initial?.scaleX ?? o.scaleX ?? 1,
+        scaleY: o.initial?.scaleY ?? o.scaleY ?? 1,
+        pivotX: o.pivot?.x ?? 0,
+        pivotY: o.pivot?.y ?? 0,
+        color: o.color || COLORS[(o.id - 1) % COLORS.length],
+        tracks: o.tracks || { translate: [], rotate: [], scale: [] },
+        autoAnim: o.autoAnim || null,
+        imgSrc: o.imgSrc || null,
+        imgEl: null,
+        imgW: o.imgW || 50,
+        imgH: o.imgH || 50,
+      }));
+
+      // 更新 nextId
+      nextId = Math.max(...objects.map(o => o.id), 0) + 1;
+      selectedId = null;
+      selectedIds = new Set();
+
+      // 重新載入圖片
+      objects.forEach(obj => {
+        if (obj.imgSrc) {
+          const target = obj;
+          const img = new Image();
+          img.onload = () => { target.imgEl = img; draw(); };
+          img.src = obj.imgSrc;
+        }
+      });
+
+      // 還原 duration
+      maxDuration = data.duration || 0;
+      recomputeMaxDuration();
+      currentTime = 0;
+
+      // 更新 UI
+      const hasAny = objects.some(o => o.tracks.translate.length > 0 || o.tracks.rotate.length > 0 || o.tracks.scale.length > 0);
+      playBtn.disabled = !hasAny;
+      exportBtn.disabled = !hasAny;
+      document.getElementById('exportHtmlBtn').disabled = !hasAny;
+
+      renderObjectList();
+      draw();
+      snapshot('import');
+      alert('匯入成功！');
+    } catch(err) {
+      alert('匯入失敗: ' + (err.message || err));
+      console.error(err);
+    }
+  };
+  reader.readAsText(file);
+  e.target.value = '';
+};
+
+exportBtn.onclick = () => {
+  const data = {
+    version: 5, duration: maxDuration,
+    canvas: { width: canvasFrame.w, height: canvasFrame.h, ratio: canvasFrame.ratio },
+    note: 'Tracks are split into translate/rotate/scale. Values are LOCAL transform relative to parent.',
+    objects: objects.map(o => ({
+      id:o.id, parentId:o.parentId, name:o.name, type:o.type, color:o.color, text:o.text,
+      imgSrc:o.imgSrc||undefined, imgW:o.type==='image'?o.imgW:undefined, imgH:o.type==='image'?o.imgH:undefined,
+      autoAnim:o.autoAnim||undefined,
+      pivot:{x:+o.pivotX.toFixed(2),y:+o.pivotY.toFixed(2)},
+      initial:{x:+o.x.toFixed(2),y:+o.y.toFixed(2),rot:+o.rot.toFixed(4),scaleX:+o.scaleX.toFixed(4),scaleY:+o.scaleY.toFixed(4)},
+      tracks:{
+        translate:o.tracks.translate.map(k=>({t:+k.t.toFixed(4),x:+k.x.toFixed(2),y:+k.y.toFixed(2)})),
+        rotate:o.tracks.rotate.map(k=>({t:+k.t.toFixed(4),rot:+k.rot.toFixed(4)})),
+        scale:o.tracks.scale.map(k=>({t:+k.t.toFixed(4),scaleX:+k.scaleX.toFixed(4),scaleY:+k.scaleY.toFixed(4)}))
+      }
+    }))
+  };
+  const blob = new Blob([JSON.stringify(data,null,2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href=url; a.download=`animation-${Date.now()}.json`; a.click();
+  URL.revokeObjectURL(url);
+};
+
+// ============================================================
+// Export HTML — 匯出可獨立播放的 HTML 動畫
+// ============================================================
+document.getElementById('exportHtmlBtn').onclick = () => {
+  const cw = canvasFrame.w, ch = canvasFrame.h;
+  const dur = maxDuration || 1;
+  const objData = JSON.stringify(objects.map(o => ({
+    id:o.id, parentId:o.parentId, type:o.type, color:o.color, text:o.text,
+    x:o.x, y:o.y, rot:o.rot, scaleX:o.scaleX, scaleY:o.scaleY,
+    pivotX:o.pivotX, pivotY:o.pivotY,
+    imgSrc:o.imgSrc||null, imgW:o.imgW||50, imgH:o.imgH||50,
+    autoAnim:o.autoAnim||null,
+    tracks: o.tracks
+  })));
+
+  const html = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>Animation Export</title>
+<style>*{margin:0;padding:0}body{background:#1a1a1a;display:flex;align-items:center;justify-content:center;height:100vh}
+canvas{background:#000;max-width:100vw;max-height:100vh}</style></head>
+<body><canvas id="c" width="${cw}" height="${ch}"></canvas>
+<script>
+const objects=${objData};
+const duration=${dur.toFixed(4)};
+const ctx=document.getElementById('c').getContext('2d');
+function getObj(id){return objects.find(o=>o.id===id)}
+function makeLocalMatrix(o){const c=Math.cos(o.rot),s=Math.sin(o.rot);return[c*o.scaleX,s*o.scaleX,-s*o.scaleY,c*o.scaleY,o.x,o.y]}
+function mulMatrix(m1,m2){const[a1,b1,c1,d1,tx1,ty1]=m1,[a2,b2,c2,d2,tx2,ty2]=m2;return[a1*a2+c1*b2,b1*a2+d1*b2,a1*c2+c1*d2,b1*c2+d1*d2,a1*tx2+c1*ty2+tx1,b1*tx2+d1*ty2+ty1]}
+function getWorldMatrix(o){const l=makeLocalMatrix(o);if(!o.parentId)return l;const p=getObj(o.parentId);return p?mulMatrix(getWorldMatrix(p),l):l}
+function lerp(a,b,u){return a+(b-a)*u}
+function applyTrack(tr,t,keys){if(!tr.length)return null;if(t<=tr[0].t)return tr[0];if(t>=tr[tr.length-1].t)return tr[tr.length-1];for(let i=0;i<tr.length-1;i++){if(t>=tr[i].t&&t<tr[i+1].t){const u=(t-tr[i].t)/(tr[i+1].t-tr[i].t);const r={};keys.forEach(k=>r[k]=lerp(tr[i][k],tr[i+1][k],u));return r}}return null}
+function applyAnimation(t){objects.forEach(o=>{const tv=applyTrack(o.tracks.translate,t,['x','y']);if(tv){o.x=tv.x;o.y=tv.y}const rv=applyTrack(o.tracks.rotate,t,['rot']);if(rv)o.rot=rv.rot;const sv=applyTrack(o.tracks.scale,t,['scaleX','scaleY']);if(sv){o.scaleX=sv.scaleX;o.scaleY=sv.scaleY}})}
+function draw(){ctx.clearRect(0,0,${cw},${ch});
+// 預載圖片
+if(!window._imgs){window._imgs={};objects.forEach(o=>{if(o.imgSrc){const img=new Image();img.src=o.imgSrc;window._imgs[o.id]=img}})}
+const imgs=window._imgs;
+// 自動動畫
+const now=performance.now()/1000;
+objects.forEach(o=>{if(o.autoAnim&&o.autoAnim.spin){o.rot+=(o.autoAnim.spinSpeed||90)*Math.PI/180*(1/60)}});
+// 繪製（反向=上層在後畫）
+[...objects].reverse().forEach(o=>{if(o.type==='group')return;const m=getWorldMatrix(o);let dx=0,dy=0;if(o.autoAnim&&o.autoAnim.shake){const str=o.autoAnim.shakeStrength||3,spd=o.autoAnim.shakeSpeed||20;dx=Math.sin(now*spd)*str;dy=Math.cos(now*spd*1.3)*str}ctx.save();ctx.setTransform(m[0],m[1],m[2],m[3],m[4]+dx,m[5]+dy);ctx.translate(-o.pivotX,-o.pivotY);const s=50;ctx.fillStyle=o.color;if(o.type==='image'&&imgs[o.id]){ctx.drawImage(imgs[o.id],-o.imgW/2,-o.imgH/2,o.imgW,o.imgH)}else if(o.type==='box'){ctx.fillRect(-s/2,-s/2,s,s)}else if(o.type==='circle'){ctx.beginPath();ctx.arc(0,0,s/2,0,Math.PI*2);ctx.fill()}if(o.text){ctx.save();const wm=getWorldMatrix(o);const wr=Math.atan2(wm[1],wm[0]);ctx.rotate(-wr);ctx.fillStyle='white';ctx.font='bold 13px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(o.text,0,0);ctx.restore()}ctx.restore()})}
+let start=null;function loop(ts){if(!start)start=ts;const t=((ts-start)/1000)%duration;applyAnimation(t);draw();requestAnimationFrame(loop)}
+requestAnimationFrame(loop);
+<` + `/script></body></html>`;
+
+  const blob = new Blob([html], {type:'text/html'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href=url; a.download=`animation-${Date.now()}.html`; a.click();
+  URL.revokeObjectURL(url);
+};
+
+// ============================================================
+// smooth.js — 軌道平滑化（Gaussian + RDP）
+// ============================================================
+const smoothSlider = document.getElementById('smoothSlider');
+const smoothValue = document.getElementById('smoothValue');
+smoothSlider.oninput = () => { smoothValue.textContent = smoothSlider.value; };
+
+function gaussianSmooth(values, windowSize) {
+  // 1D Gaussian smooth，values = array of numbers
+  if (values.length < 3 || windowSize < 1) return values.slice();
+  const sigma = windowSize / 2;
+  const kernel = [];
+  let sum = 0;
+  for (let i = -windowSize; i <= windowSize; i++) {
+    const w = Math.exp(-(i * i) / (2 * sigma * sigma));
+    kernel.push(w);
+    sum += w;
+  }
+  kernel.forEach((_, i, a) => a[i] /= sum);
+
+  const result = [];
+  for (let i = 0; i < values.length; i++) {
+    let v = 0;
+    for (let k = 0; k < kernel.length; k++) {
+      const idx = Math.max(0, Math.min(values.length - 1, i + k - windowSize));
+      v += values[idx] * kernel[k];
+    }
+    result.push(v);
+  }
+  return result;
+}
+
+function rdpSimplify(points, epsilon) {
+  // Ramer-Douglas-Peucker on [{t, ...values}]
+  // 用 t 作為 x 軸，第一個 value 作為 y 軸（多維度分別做）
+  if (points.length <= 2) return points.slice();
+
+  let maxDist = 0, maxIdx = 0;
+  const start = points[0], end = points[points.length - 1];
+  const dt = end.t - start.t;
+
+  for (let i = 1; i < points.length - 1; i++) {
+    // 計算點到 start-end 線段的距離（在 t-value 空間）
+    const dist = pointLineDistance(points[i], start, end, dt);
+    if (dist > maxDist) { maxDist = dist; maxIdx = i; }
+  }
+
+  if (maxDist > epsilon) {
+    const left = rdpSimplify(points.slice(0, maxIdx + 1), epsilon);
+    const right = rdpSimplify(points.slice(maxIdx), epsilon);
+    return left.slice(0, -1).concat(right);
+  }
+  return [start, end];
+}
+
+function pointLineDistance(p, start, end, dt) {
+  // 簡化：用所有數值欄位的最大偏差
+  if (dt === 0) return 0;
+  const u = (p.t - start.t) / dt;
+  let maxD = 0;
+  for (const key of Object.keys(p)) {
+    if (key === 't') continue;
+    if (start[key] === undefined) continue;
+    const interp = start[key] + (end[key] - start[key]) * u;
+    maxD = Math.max(maxD, Math.abs(p[key] - interp));
+  }
+  return maxD;
+}
+
+function smoothTrack(track, windowSize, epsilon) {
+  if (track.length < 3) return track.slice();
+  // 取出所有數值欄位（除了 t）
+  const keys = Object.keys(track[0]).filter(k => k !== 't');
+  // Gaussian smooth 每個欄位
+  const smoothed = track.map(k => ({ ...k }));
+  keys.forEach(key => {
+    const values = track.map(k => k[key]);
+    const sv = gaussianSmooth(values, windowSize);
+    sv.forEach((v, i) => smoothed[i][key] = v);
+  });
+  // RDP 簡化
+  return rdpSimplify(smoothed, epsilon);
+}
+
+document.getElementById('smoothBtn').onclick = () => {
+  // 對所有有軌道的物件做平滑
+  const hasAny = objects.some(o => o.tracks.translate.length > 0 || o.tracks.rotate.length > 0 || o.tracks.scale.length > 0);
+  if (!hasAny) { alert('沒有任何動畫軌道可平滑'); return; }
+
+  const strength = parseInt(smoothSlider.value);
+  const windowSize = strength;
+  const epsilon = strength * 0.3;
+
+  objects.forEach(obj => {
+    if (obj.tracks.translate.length > 2) {
+      obj.tracks.translate = smoothTrack(obj.tracks.translate, windowSize, epsilon);
+    }
+    if (obj.tracks.rotate.length > 2) {
+      obj.tracks.rotate = smoothTrack(obj.tracks.rotate, windowSize, epsilon * 0.01);
+    }
+    if (obj.tracks.scale.length > 2) {
+      obj.tracks.scale = smoothTrack(obj.tracks.scale, windowSize, epsilon * 0.01);
+    }
+  });
+
+  recomputeMaxDuration();
+  renderObjectList();
+  draw();
+  snapshot('smooth');
+};
+
+// ============================================================
+// properties.js — 右側屬性面板 + 自動動畫
+// ============================================================
+const propEmpty = document.getElementById('propEmpty');
+const propContent = document.getElementById('propContent');
+const propX = document.getElementById('propX');
+const propY = document.getElementById('propY');
+const propRot = document.getElementById('propRot');
+const propSX = document.getElementById('propSX');
+const propSY = document.getElementById('propSY');
+const autoShake = document.getElementById('autoShake');
+const shakeOpts = document.getElementById('shakeOpts');
+const shakeStrength = document.getElementById('shakeStrength');
+const shakeSpeed = document.getElementById('shakeSpeed');
+const autoSpin = document.getElementById('autoSpin');
+const spinOpts = document.getElementById('spinOpts');
+const spinSpeed = document.getElementById('spinSpeed');
+
+function updatePropertiesPanel() {
+  const obj = getSelected();
+  if (!obj) {
+    propEmpty.style.display = 'block';
+    propContent.style.display = 'none';
+    return;
+  }
+  propEmpty.style.display = 'none';
+  propContent.style.display = 'block';
+
+  propX.value = obj.x.toFixed(1);
+  propY.value = obj.y.toFixed(1);
+  propRot.value = (obj.rot * 180 / Math.PI).toFixed(1);
+  propSX.value = obj.scaleX.toFixed(2);
+  propSY.value = obj.scaleY.toFixed(2);
+
+  // Auto animation state
+  const auto = obj.autoAnim || {};
+  autoShake.checked = !!auto.shake;
+  shakeOpts.style.display = auto.shake ? 'flex' : 'none';
+  shakeStrength.value = auto.shakeStrength || 3;
+  shakeSpeed.value = auto.shakeSpeed || 20;
+  autoSpin.checked = !!auto.spin;
+  spinOpts.style.display = auto.spin ? 'flex' : 'none';
+  spinSpeed.value = auto.spinSpeed || 90;
+}
+
+// Transform 輸入
+[propX, propY, propRot, propSX, propSY].forEach(input => {
+  input.onchange = () => {
+    const obj = getSelected();
+    if (!obj) return;
+    obj.x = parseFloat(propX.value) || 0;
+    obj.y = parseFloat(propY.value) || 0;
+    obj.rot = (parseFloat(propRot.value) || 0) * Math.PI / 180;
+    obj.scaleX = Math.max(0.05, parseFloat(propSX.value) || 1);
+    obj.scaleY = Math.max(0.05, parseFloat(propSY.value) || 1);
+    draw();
+    snapshot('prop edit');
+  };
+});
+
+// Auto animation toggles
+autoShake.onchange = () => {
+  const obj = getSelected();
+  if (!obj) return;
+  if (!obj.autoAnim) obj.autoAnim = {};
+  obj.autoAnim.shake = autoShake.checked;
+  obj.autoAnim.shakeStrength = parseFloat(shakeStrength.value) || 3;
+  obj.autoAnim.shakeSpeed = parseFloat(shakeSpeed.value) || 20;
+  shakeOpts.style.display = autoShake.checked ? 'flex' : 'none';
+  startAutoAnimLoop();
+};
+shakeStrength.onchange = shakeSpeed.onchange = () => {
+  const obj = getSelected();
+  if (!obj || !obj.autoAnim) return;
+  obj.autoAnim.shakeStrength = parseFloat(shakeStrength.value) || 3;
+  obj.autoAnim.shakeSpeed = parseFloat(shakeSpeed.value) || 20;
+};
+
+autoSpin.onchange = () => {
+  const obj = getSelected();
+  if (!obj) return;
+  if (!obj.autoAnim) obj.autoAnim = {};
+  obj.autoAnim.spin = autoSpin.checked;
+  obj.autoAnim.spinSpeed = parseFloat(spinSpeed.value) || 90;
+  spinOpts.style.display = autoSpin.checked ? 'flex' : 'none';
+  startAutoAnimLoop();
+};
+spinSpeed.onchange = () => {
+  const obj = getSelected();
+  if (!obj || !obj.autoAnim) return;
+  obj.autoAnim.spinSpeed = parseFloat(spinSpeed.value) || 90;
+};
+
+// Auto animation loop
+let autoAnimRunning = false;
+let autoAnimLastTime = 0;
+
+function startAutoAnimLoop() {
+  if (autoAnimRunning) return;
+  const hasAuto = objects.some(o => o.autoAnim && (o.autoAnim.shake || o.autoAnim.spin));
+  if (!hasAuto) return;
+  autoAnimRunning = true;
+  autoAnimLastTime = performance.now();
+  requestAnimationFrame(autoAnimLoop);
+}
+
+function autoAnimLoop(now) {
+  const hasAuto = objects.some(o => o.autoAnim && (o.autoAnim.shake || o.autoAnim.spin));
+  if (!hasAuto) { autoAnimRunning = false; return; }
+
+  const dt = (now - autoAnimLastTime) / 1000;
+  autoAnimLastTime = now;
+
+  // 播放中或錄製中不套用自動動畫（避免衝突）
+  if (!playing && !recording) {
+    objects.forEach(obj => {
+      if (!obj.autoAnim) return;
+      if (obj.autoAnim.spin) {
+        const speed = (obj.autoAnim.spinSpeed || 90) * Math.PI / 180; // deg/s → rad/s
+        obj.rot += speed * dt;
+      }
+      // shake 不改變 obj 的實際座標，在 draw 時加偏移
+    });
+    draw();
+  }
+
+  requestAnimationFrame(autoAnimLoop);
+}
+
+// 取得物件的 shake 偏移（用於繪製時）
+function getShakeOffset(obj) {
+  // 自身的 shake
+  let dx = 0, dy = 0;
+  if (obj.autoAnim && obj.autoAnim.shake) {
+    const str = obj.autoAnim.shakeStrength || 3;
+    const spd = obj.autoAnim.shakeSpeed || 20;
+    const t = performance.now() / 1000;
+    dx = Math.sin(t * spd) * str + Math.sin(t * spd * 1.7) * str * 0.5;
+    dy = Math.cos(t * spd * 1.3) * str + Math.cos(t * spd * 2.1) * str * 0.3;
+  }
+  // 繼承 parent 的 shake（Group 震動會傳遞給子物件）
+  if (obj.parentId !== null) {
+    const parent = getObj(obj.parentId);
+    if (parent) {
+      const ps = getShakeOffset(parent);
+      dx += ps.dx; dy += ps.dy;
+    }
+  }
+  return { dx, dy };
+}
+
+// ============================================================
+// main.js — 滑鼠互動 + 鍵盤 + 初始化
+// ============================================================
+
+// 舞台平移（中鍵 / Alt+左鍵）
+stage.addEventListener('mousedown', (e) => {
+  if (e.button === 1 || (e.button === 0 && e.altKey)) {
+    e.preventDefault();
+    isPanning = true;
+    panStartX = e.clientX; panStartY = e.clientY;
+    panStartPanX = panX; panStartPanY = panY;
+    stage.style.cursor = 'grabbing';
+    return;
+  }
+});
+window.addEventListener('mousemove', (e) => {
+  if (!isPanning) return;
+  panX = panStartPanX + (e.clientX - panStartX);
+  panY = panStartPanY + (e.clientY - panStartY);
+  draw();
+});
+window.addEventListener('mouseup', (e) => {
+  if (isPanning) {
+    isPanning = false;
+    stage.style.cursor = '';
+    updateCursor();
+  }
+});
+// 滾輪縮放
+stage.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const delta = e.deltaY > 0 ? 0.9 : 1.1;
+  stageZoom = Math.max(0.2, Math.min(5, stageZoom * delta));
+  draw();
+}, { passive: false });
+stage.addEventListener('auxclick', (e) => e.preventDefault()); // 防中鍵貼上
+
+stage.addEventListener('mousedown', (e) => {
+  if (e.button === 1 || e.altKey) return; // pan 已處理
+  if (playing) return;
+  if (editingTextId !== null) return;
+  const rect = stage.getBoundingClientRect();
+  const screenX = e.clientX-rect.left, screenY = e.clientY-rect.top;
+  const world = screenToWorld(screenX, screenY);
+  const mx = world.x, my = world.y;
+
+  let targetObj = null, activeHandle = null;
+
+  if (transformMode === 'scale' || transformMode === 'rotate') {
+    const h = hitHandle(mx, my, transformMode);
+    if (h) { targetObj = h.obj; activeHandle = h.handle; }
+    else { const hit = hitTest(mx, my); if (hit && hit.id !== selectedId) { selectedId = hit.id; renderObjectList(); draw(); } return; }
+  } else {
+    const hit = hitTest(mx, my);
+    if (!hit) return;
+    targetObj = hit;
+  }
+
+  // 多選邏輯：延遲切換（只有 click 不拖曳才切換，避免誤觸）
+  let pendingSelectionSwitch = null;
+  if (shiftHeld) {
+    // Shift 立即生效
+    if (selectedIds.has(targetObj.id)) {
+      selectedIds.delete(targetObj.id);
+      if (selectedId === targetObj.id) selectedId = selectedIds.size > 0 ? [...selectedIds][0] : null;
+    } else {
+      selectedIds.add(targetObj.id);
+      selectedId = targetObj.id;
+    }
+  } else if (!selectedIds.has(targetObj.id)) {
+    // 點到未選中的物件 → 延遲到 mouseup 才切換（防止拖曳時誤切）
+    pendingSelectionSwitch = targetObj.id;
+    // 暫時加入選取讓拖曳能動（如果最終是拖曳就保持，如果是 click 就切換成單選）
+    selectedId = targetObj.id;
+    selectedIds.add(targetObj.id);
+  } else {
+    selectedId = targetObj.id;
+  }
+  // 記錄 pending switch 到 dragObjStart 裡
+  window._pendingSelSwitch = pendingSelectionSwitch;
+  window._dragDidMove = false;
+  updatePropertiesPanel();
+
+  if (recording) {
+    recordSegmentStart = performance.now();
+    recordArmed = false;
+    recordedObjectsThisSession.add(targetObj.id);
+    recordingObjectId = targetObj.id;
+    captureKeyframe(targetObj, true);
+  }
+
+  renderObjectList();
+
+  dragStartX = mx; dragStartY = my;
+  const m = getWorldMatrix(targetObj);
+  const pivotWorld = { x: m[4], y: m[5] };
+  const dx0 = mx-pivotWorld.x, dy0 = my-pivotWorld.y;
+  dragObjStart = {
+    x:targetObj.x, y:targetObj.y, rot:targetObj.rot,
+    scaleX:targetObj.scaleX, scaleY:targetObj.scaleY,
+    pivotX:targetObj.pivotX, pivotY:targetObj.pivotY,
+    pivotWorldX:pivotWorld.x, pivotWorldY:pivotWorld.y,
+    startDx:dx0, startDy:dy0,
+    startAngle:Math.atan2(dy0,dx0),
+    startDist:Math.sqrt(dx0*dx0+dy0*dy0),
+    handle:activeHandle,
+    // 多選：記錄所有選中物件的起始位置
+    multiStart: [...selectedIds].map(id => { const o = getObj(id); return o ? { id, x: o.x, y: o.y } : null; }).filter(Boolean)
+  };
+  dragMode = transformMode;
+  updateModeIndicator(); draw();
+});
+
+stage.addEventListener('mousemove', (e) => {
+  const rect = stage.getBoundingClientRect();
+  const screenX = e.clientX-rect.left, screenY = e.clientY-rect.top;
+  const world = screenToWorld(screenX, screenY);
+  const mx = world.x, my = world.y;
+  if (!dragMode) { updateHoverCursor(mx, my); return; }
+
+  const obj = getSelected();
+  if (!obj) return;
+  const dxWorld = mx-dragStartX, dyWorld = my-dragStartY;
+  if (Math.abs(dxWorld) > 2 || Math.abs(dyWorld) > 2) window._dragDidMove = true;
+
+  if (dragMode === 'move') {
+    // 移動所有選中物件
+    if (dragObjStart.multiStart && dragObjStart.multiStart.length > 1) {
+      dragObjStart.multiStart.forEach(ms => {
+        const o = getObj(ms.id);
+        if (!o) return;
+        if (o.parentId === null) { o.x = ms.x + dxWorld; o.y = ms.y + dyWorld; }
+        else { const pm = getWorldMatrix(getObj(o.parentId)); const invPm = invMatrix(pm); o.x = ms.x + invPm[0]*dxWorld + invPm[2]*dyWorld; o.y = ms.y + invPm[1]*dxWorld + invPm[3]*dyWorld; }
+      });
+    } else {
+      if (obj.parentId === null) { obj.x=dragObjStart.x+dxWorld; obj.y=dragObjStart.y+dyWorld; }
+      else { const pm=getWorldMatrix(getObj(obj.parentId)); const invPm=invMatrix(pm); obj.x=dragObjStart.x+invPm[0]*dxWorld+invPm[2]*dyWorld; obj.y=dragObjStart.y+invPm[1]*dxWorld+invPm[3]*dyWorld; }
+    }
+  } else if (dragMode === 'rotate') {
+    const dx=mx-dragObjStart.pivotWorldX, dy=my-dragObjStart.pivotWorldY;
+    const currentAngle = Math.atan2(dy, dx);
+    // 計算相對於上一幀的角度差（避免 atan2 跨 ±π 跳變）
+    let delta = currentAngle - dragObjStart.startAngle;
+    // Normalize delta to -π..π
+    while (delta > Math.PI) delta -= Math.PI * 2;
+    while (delta < -Math.PI) delta += Math.PI * 2;
+    // 累積到 prevAngle 追蹤
+    if (dragObjStart._prevAngle === undefined) {
+      dragObjStart._prevAngle = currentAngle;
+      dragObjStart._accumDelta = delta;
+    } else {
+      let frameDelta = currentAngle - dragObjStart._prevAngle;
+      while (frameDelta > Math.PI) frameDelta -= Math.PI * 2;
+      while (frameDelta < -Math.PI) frameDelta += Math.PI * 2;
+      dragObjStart._accumDelta += frameDelta;
+      dragObjStart._prevAngle = currentAngle;
+    }
+    obj.rot = dragObjStart.rot + dragObjStart._accumDelta;
+    if (shiftHeld) { const step=Math.PI/12; obj.rot=Math.round(obj.rot/step)*step; }
+  } else if (dragMode === 'scale') {
+    const handle=dragObjStart.handle;
+    const allowX=!(handle==='t'||handle==='b'), allowY=!(handle==='l'||handle==='r');
+    const totalRot=dragObjStart.rot+getParentRot(obj);
+    const cosR=Math.cos(-totalRot), sinR=Math.sin(-totalRot);
+    const sLx=dragObjStart.startDx*cosR-dragObjStart.startDy*sinR;
+    const sLy=dragObjStart.startDx*sinR+dragObjStart.startDy*cosR;
+    const cLx=(mx-dragObjStart.pivotWorldX)*cosR-(my-dragObjStart.pivotWorldY)*sinR;
+    const cLy=(mx-dragObjStart.pivotWorldX)*sinR+(my-dragObjStart.pivotWorldY)*cosR;
+    let ratioX=(allowX&&Math.abs(sLx)>1)?cLx/sLx:1;
+    let ratioY=(allowY&&Math.abs(sLy)>1)?cLy/sLy:1;
+    if (shiftHeld) { if(allowX&&allowY){const r=Math.abs(ratioX)>Math.abs(ratioY)?ratioX:ratioY;ratioX=r;ratioY=r;} else if(allowX){ratioY=ratioX;} else if(allowY){ratioX=ratioY;} }
+    obj.scaleX=Math.max(0.05, dragObjStart.scaleX*ratioX);
+    obj.scaleY=Math.max(0.05, dragObjStart.scaleY*ratioY);
+  } else if (dragMode === 'pivot') {
+    const m=getWorldMatrix(obj); const invM=invMatrix(m);
+    obj.pivotX=dragObjStart.pivotX+invM[0]*dxWorld+invM[2]*dyWorld;
+    obj.pivotY=dragObjStart.pivotY+invM[1]*dxWorld+invM[3]*dyWorld;
+    if (obj.parentId===null) { obj.x=dragObjStart.x+dxWorld; obj.y=dragObjStart.y+dyWorld; }
+    else { const pm=getWorldMatrix(getObj(obj.parentId)); const invPm=invMatrix(pm); obj.x=dragObjStart.x+invPm[0]*dxWorld+invPm[2]*dyWorld; obj.y=dragObjStart.y+invPm[1]*dxWorld+invPm[3]*dyWorld; }
+  }
+
+  if (recording && dragMode !== 'pivot') {
+    // 多選錄製：對所有選中物件打 keyframe
+    selectedIds.forEach(id => {
+      const o = getObj(id);
+      if (o) captureKeyframe(o);
+    });
+  }
+  draw();
+});
+
+window.addEventListener('mouseup', () => {
+  const wasDragging = dragMode !== null;
+  if (dragMode && recording && recordingObjectId && dragMode !== 'pivot') { const obj=getObj(recordingObjectId); if(obj) captureKeyframe(obj, true); }
+  if (recording && recordSegmentStart > 0) { recordAccumTime += (performance.now()-recordSegmentStart)/1000; recordSegmentStart = 0; }
+  const finishedMode = dragMode;
+  dragMode = null;
+  updateModeIndicator();
+
+  // 延遲選取切換：如果是 click（沒有移動）且有 pending switch → 切換成單選
+  if (window._pendingSelSwitch && !window._dragDidMove) {
+    selectedId = window._pendingSelSwitch;
+    selectedIds = new Set([window._pendingSelSwitch]);
+    renderObjectList();
+    updatePropertiesPanel();
+    draw();
+  }
+  window._pendingSelSwitch = null;
+
+  if (wasDragging && !recording) {
+    // Auto Key：拖曳結束時自動打 keyframe（所有選中物件）
+    if (autoKeyMode && finishedMode !== 'pivot') {
+      selectedIds.forEach(id => {
+        const o = getObj(id);
+        if (o) autoKeyCapture(o, finishedMode);
+      });
+    }
+    snapshot(finishedMode);
+  }
+});
+
+stage.addEventListener('dblclick', (e) => {
+  if (recording || playing) return;
+  const rect = stage.getBoundingClientRect();
+  const world = screenToWorld(e.clientX-rect.left, e.clientY-rect.top);
+  const hit = hitTest(world.x, world.y);
+  if (!hit) return;
+  startTextEdit(hit);
+});
+
+// ============================================================
+// 圖片拖放（Drag & Drop）
+// ============================================================
+stage.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+stage.addEventListener('drop', (e) => {
+  e.preventDefault();
+  const allFiles = [...e.dataTransfer.files];
+  // PSD 檔案
+  const psdFiles = allFiles.filter(f => f.name.toLowerCase().endsWith('.psd'));
+  if (psdFiles.length > 0) { psdFiles.forEach(f => importPSD(f)); return; }
+  // 一般圖片
+  const imgFiles = allFiles.filter(f => f.type.startsWith('image/'));
+  if (imgFiles.length === 0) return;
+  const rect = stage.getBoundingClientRect();
+  const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+  const world = screenToWorld(sx, sy);
+  imgFiles.forEach(f => addImageObject(f, world.x, world.y));
+});
+// 也允許拖到 sidebar
+objectList.addEventListener('dragover', (e) => {
+  if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }
+});
+objectList.addEventListener('drop', (e) => {
+  const allFiles = [...(e.dataTransfer?.files || [])];
+  if (allFiles.length === 0) return;
+  e.preventDefault();
+  // PSD 檔案
+  const psdFiles = allFiles.filter(f => f.name.toLowerCase().endsWith('.psd'));
+  if (psdFiles.length > 0) { psdFiles.forEach(f => importPSD(f)); return; }
+  // 一般圖片
+  const imgFiles = allFiles.filter(f => f.type.startsWith('image/'));
+  imgFiles.forEach(f => addImageObject(f));
+});
+
+// 文字編輯
+function startTextEdit(obj) {
+  editingTextId = obj.id; selectedId = obj.id;
+  textEditor.textContent = obj.text || '';
+  textEditor.style.display = 'block';
+  positionTextEditor(obj);
+  setTimeout(() => { const range=document.createRange(); range.selectNodeContents(textEditor); const sel=window.getSelection(); sel.removeAllRanges(); sel.addRange(range); textEditor.focus(); }, 0);
+  draw();
+}
+function positionTextEditor(obj) {
+  const m = getWorldMatrix(obj);
+  textEditor.style.left = (m[4]-(textEditor.offsetWidth||80)/2)+'px';
+  textEditor.style.top = (m[5]-(textEditor.offsetHeight||28)/2)+'px';
+}
+function commitTextEdit() {
+  if (editingTextId === null) return;
+  const obj = getObj(editingTextId);
+  const newText = textEditor.textContent || '';
+  const changed = obj && obj.text !== newText;
+  if (obj) obj.text = newText;
+  textEditor.style.display = 'none'; textEditor.textContent = '';
+  editingTextId = null; draw();
+  if (changed) snapshot('text');
+}
+textEditor.addEventListener('blur', commitTextEdit);
+textEditor.addEventListener('keydown', (e) => {
+  e.stopPropagation();
+  if (e.key==='Enter'&&!e.shiftKey) { e.preventDefault(); commitTextEdit(); }
+  if (e.key==='Escape') { e.preventDefault(); textEditor.style.display='none'; textEditor.textContent=''; editingTextId=null; draw(); }
+  requestAnimationFrame(() => { const obj=getObj(editingTextId); if(obj) positionTextEditor(obj); });
+});
+
+// 鍵盤
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Shift') shiftHeld = true;
+  if ((e.ctrlKey||e.metaKey)&&(e.key==='z'||e.key==='Z')) { if(editingTextId!==null) return; e.preventDefault(); if(e.shiftKey) redo(); else undo(); return; }
+  if ((e.ctrlKey||e.metaKey)&&(e.key==='y'||e.key==='Y')) { if(editingTextId!==null) return; e.preventDefault(); redo(); return; }
+  if (e.target.tagName === 'INPUT') return;
+  if (editingTextId !== null) return;
+  if (e.key==='q'||e.key==='Q') { transformMode='move'; updateModeIndicator(); draw(); return; }
+  if (e.key==='w'||e.key==='W') { transformMode='rotate'; updateModeIndicator(); draw(); return; }
+  if (e.key==='e'||e.key==='E') { transformMode='scale'; updateModeIndicator(); draw(); return; }
+  if (e.key==='p'||e.key==='P') { transformMode='pivot'; updateModeIndicator(); draw(); return; }
+  if (e.key==='Delete'||e.key==='Backspace') { if(selectedId&&!recording&&!playing){const obj=getSelected();if(obj&&confirm(`刪除 ${obj.name}？`))deleteObject(obj.id);} }
+  if (e.key===' ') { e.preventDefault(); if(!recording) togglePlay(); }
+  if (e.key==='F2') { e.preventDefault(); recordBtn.click(); }
+  if (e.key==='F3') { e.preventDefault(); autoKeyBtn.click(); }
+});
+window.addEventListener('keyup', (e) => { if (e.key==='Shift') shiftHeld=false; });
+
+function updateModeIndicator() {
+  modeIndicator.className = 'mode-indicator show';
+  const modeLabel = {move:'MOVE (Q)',rotate:'ROTATE (W)',scale:'SCALE (E)',pivot:'PIVOT (P)'}[transformMode];
+  if (recording) {
+    modeIndicator.classList.add('recording');
+    if (recordArmed) modeIndicator.textContent = '● ARMED — '+modeLabel+' — 拖物件開始';
+    else if (recordSegmentStart>0&&dragMode) modeIndicator.textContent = '● REC '+currentTime.toFixed(2)+'s '+getObj(recordingObjectId).name+' ('+dragMode+')';
+    else modeIndicator.textContent = '❚❚ PAUSED '+currentTime.toFixed(2)+'s — '+modeLabel;
+  } else {
+    modeIndicator.classList.add(transformMode);
+    modeIndicator.textContent = modeLabel;
+  }
+  updateCursor();
+}
+
+document.getElementById('undoBtn').onclick = undo;
+document.getElementById('redoBtn').onclick = redo;
+
+// 初始
+addObject('box');
+addObject('circle');
+updateModeIndicator();
+snapshot('init');
+</script>
+</body>
+</html>
