@@ -27,10 +27,10 @@
   <div class="help-panel" id="helpPanel">
     <div class="help-title">Object Animation Tool <span class="help-toggle">[H] 收合</span></div>
     <div class="help-body" id="helpBody">
-      <b>Transform</b> Q Move ・ W Rotate ・ E Scale ・ P Pivot<br>
-      <b>修飾</b> Shift=等比/15°鎖 ・ Alt+拖=平移 ・ 滾輪=縮放<br>
+      <b>Transform</b> Q=T+S (Scale handles) ・ W=T+R (Rotate handles) ・ P=Pivot<br>
+      <b>修飾</b> Shift=等比/15°鎖 ・ G=Local/Global旋轉 ・ Alt+拖=平移 ・ 滾輪=縮放<br>
       <b>動畫</b> F2=Record ・ F3=Auto Key ・ Space=Play<br>
-      <b>編輯</b> 雙擊=文字 ・ Del=刪除 ・ Ctrl+Z/Y=Undo/Redo<br>
+      <b>編輯</b> Ctrl+C/V=複製貼上 ・ Del=刪除 ・ Ctrl+Z/Y=Undo/Redo<br>
       <b>匯入</b> 拖放 PNG/PSD 到舞台 ・ Shift+Click=多選<br>
     </div>
   </div>
@@ -145,7 +145,8 @@ let loopEnabled = false;
 let dragMode = null;
 let dragStartX = 0, dragStartY = 0;
 let dragObjStart = null;
-let transformMode = 'move';
+let transformMode = 'ts'; // 'ts' = Transform+Scale, 'tr' = Transform+Rotate, 'pivot'
+let rotateSpace = 'global'; // 'local' = 各自繞自己中心, 'global' = 繞多選中心
 let editingTextId = null;
 
 let listDragId = null;
@@ -731,14 +732,6 @@ function draw() {
 
     if (obj.text && editingTextId !== obj.id) {
       sCtx.save();
-      // 反旋轉：抵消物件自身 + 所有 parent 的累積旋轉
-      const worldM = getWorldMatrix(obj);
-      const worldRot = Math.atan2(worldM[1], worldM[0]);
-      sCtx.rotate(-worldRot);
-      // 反 scale
-      const fx = obj.scaleX !== 0 ? 1/Math.abs(obj.scaleX) : 1;
-      const fy = obj.scaleY !== 0 ? 1/Math.abs(obj.scaleY) : 1;
-      sCtx.scale(fx*Math.sign(obj.scaleX||1), fy*Math.sign(obj.scaleY||1));
       sCtx.fillStyle = 'white';
       sCtx.font = 'bold 13px -apple-system, sans-serif';
       sCtx.textAlign = 'center'; sCtx.textBaseline = 'middle';
@@ -753,9 +746,9 @@ function draw() {
     sCtx.restore();
   });
 
-  // 選中框
+  // 選中框（每個選中物件）
   objects.forEach(obj => {
-    if (obj.id !== selectedId && !(recording && obj.id === recordingObjectId)) return;
+    if (!selectedIds.has(obj.id) && !(recording && obj.id === recordingObjectId)) return;
     const m = getWorldMatrix(obj);
     const dpr = window.devicePixelRatio || 1;
     const size = 50;
@@ -775,16 +768,18 @@ function draw() {
     const edgesW = edges.map(p => applyMatrix(m, p.x, p.y));
 
     if (obj.id === selectedId) {
-      const frameColor = { move:'#3fa37a', rotate:'#f39c12', scale:'#9b59b6', pivot:'#f1c40f' }[transformMode];
+      const frameColor = { ts:'#3fa37a', tr:'#f39c12', pivot:'#f1c40f' }[transformMode] || '#3fa37a';
       sCtx.save();
       sCtx.strokeStyle = frameColor; sCtx.lineWidth = 1.2 / stageZoom;
 
-      if (transformMode === 'scale') {
+      if (transformMode === 'ts') {
+        // T+S 模式：實線框 + 8 個 scale handle
         sCtx.beginPath(); sCtx.moveTo(cornersW[0].x, cornersW[0].y);
         for (let i=1;i<4;i++) sCtx.lineTo(cornersW[i].x, cornersW[i].y);
         sCtx.closePath(); sCtx.stroke();
         [...cornersW,...edgesW].forEach(pt => { sCtx.fillStyle='white'; sCtx.fillRect(pt.x-4,pt.y-4,8,8); sCtx.strokeStyle=frameColor; sCtx.strokeRect(pt.x-4,pt.y-4,8,8); });
-      } else if (transformMode === 'rotate') {
+      } else if (transformMode === 'tr') {
+        // T+R 模式：虛線框 + 旋轉環
         sCtx.save(); sCtx.fillStyle = frameColor+'15';
         const center = getWorldTranslate(obj);
         const outerCorners = cornersW.map(p => { const dx=p.x-center.tx,dy=p.y-center.ty; const len=Math.sqrt(dx*dx+dy*dy)||1; return {x:p.x+dx/len*ROTATE_BAND_OUTER,y:p.y+dy/len*ROTATE_BAND_OUTER}; });
@@ -793,9 +788,6 @@ function draw() {
         sCtx.fill('evenodd'); sCtx.restore();
         sCtx.setLineDash([4,3]); sCtx.beginPath(); sCtx.moveTo(cornersW[0].x,cornersW[0].y); for(let i=1;i<4;i++) sCtx.lineTo(cornersW[i].x,cornersW[i].y); sCtx.closePath(); sCtx.stroke(); sCtx.setLineDash([]);
         cornersW.forEach(pt => { sCtx.beginPath(); sCtx.arc(pt.x,pt.y,8,0,Math.PI*2); sCtx.stroke(); });
-      } else if (transformMode === 'move') {
-        sCtx.beginPath(); sCtx.moveTo(cornersW[0].x,cornersW[0].y); for(let i=1;i<4;i++) sCtx.lineTo(cornersW[i].x,cornersW[i].y); sCtx.closePath(); sCtx.stroke();
-        edgesW.forEach(pt => { const center=getWorldTranslate(obj); const dx=pt.x-center.tx,dy=pt.y-center.ty; const len=Math.sqrt(dx*dx+dy*dy)||1; const ux=dx/len,uy=dy/len; const px=-uy,py=ux; sCtx.fillStyle=frameColor; sCtx.beginPath(); sCtx.moveTo(pt.x+ux*14,pt.y+uy*14); sCtx.lineTo(pt.x+ux*6+px*4,pt.y+uy*6+py*4); sCtx.lineTo(pt.x+ux*6-px*4,pt.y+uy*6-py*4); sCtx.closePath(); sCtx.fill(); });
       } else if (transformMode === 'pivot') {
         sCtx.setLineDash([2,4]); sCtx.globalAlpha=0.5; sCtx.beginPath(); sCtx.moveTo(cornersW[0].x,cornersW[0].y); for(let i=1;i<4;i++) sCtx.lineTo(cornersW[i].x,cornersW[i].y); sCtx.closePath(); sCtx.stroke(); sCtx.setLineDash([]); sCtx.globalAlpha=1;
       }
@@ -821,6 +813,33 @@ function draw() {
       sCtx.restore();
     }
   });
+
+  // 多選統一 bounding box
+  if (selectedIds.size > 1) {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    selectedIds.forEach(id => {
+      const o = getObj(id);
+      if (!o) return;
+      const m = getWorldMatrix(o);
+      const s = o.type === 'image' ? Math.max(o.imgW, o.imgH) / 2 : 25;
+      const pts = [{x:-s,y:-s},{x:s,y:-s},{x:s,y:s},{x:-s,y:s}];
+      pts.forEach(p => {
+        const wp = applyMatrix(m, p.x - o.pivotX, p.y - o.pivotY);
+        if (wp.x < minX) minX = wp.x; if (wp.x > maxX) maxX = wp.x;
+        if (wp.y < minY) minY = wp.y; if (wp.y > maxY) maxY = wp.y;
+      });
+    });
+    sCtx.save();
+    sCtx.strokeStyle = '#3fa37a'; sCtx.lineWidth = 1.5 / stageZoom;
+    sCtx.setLineDash([4 / stageZoom, 4 / stageZoom]);
+    sCtx.strokeRect(minX, minY, maxX - minX, maxY - minY);
+    sCtx.setLineDash([]);
+    // 中心點標記
+    const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+    sCtx.fillStyle = '#3fa37a';
+    sCtx.beginPath(); sCtx.arc(cx, cy, 3 / stageZoom, 0, Math.PI * 2); sCtx.fill();
+    sCtx.restore();
+  }
 
   // Canvas 輸出範圍框（在世界座標中）
   drawCanvasFrame();
@@ -976,15 +995,19 @@ function hitHandle(mx, my, mode) {
 
 function updateCursor() {
   stage.classList.remove('cursor-move','cursor-rotate','cursor-scale','cursor-pivot','cursor-scale-h','cursor-scale-v','cursor-scale-ne','cursor-scale-nw','cursor-default');
-  stage.classList.add('cursor-' + transformMode);
+  const cursorMap = { ts: 'cursor-move', tr: 'cursor-move', pivot: 'cursor-pivot' };
+  stage.classList.add(cursorMap[transformMode] || 'cursor-move');
 }
 
 function updateHoverCursor(mx, my) {
   stage.classList.remove('cursor-move','cursor-rotate','cursor-scale','cursor-pivot','cursor-scale-h','cursor-scale-v','cursor-scale-ne','cursor-scale-nw','cursor-default');
-  if (transformMode === 'move' || transformMode === 'pivot') { stage.classList.add('cursor-'+transformMode); return; }
-  const h = hitHandle(mx, my, transformMode);
-  if (!h) { stage.classList.add('cursor-default'); return; }
-  if (transformMode === 'rotate') { stage.classList.add('cursor-rotate'); return; }
+  if (transformMode === 'pivot') { stage.classList.add('cursor-pivot'); return; }
+  // T+S / T+R：hover handle 時顯示對應游標，否則顯示 move
+  const handleMode = transformMode === 'ts' ? 'scale' : 'rotate';
+  const h = hitHandle(mx, my, handleMode);
+  if (!h) { stage.classList.add('cursor-move'); return; }
+  if (transformMode === 'tr') { stage.classList.add('cursor-rotate'); return; }
+  // T+S：依 handle 方向顯示 scale 游標
   const obj = h.obj;
   const m = getWorldMatrix(obj);
   const worldRot = Math.atan2(m[1], m[0]);
@@ -1507,7 +1530,7 @@ const imgs=window._imgs;
 const now=performance.now()/1000;
 objects.forEach(o=>{if(o.autoAnim&&o.autoAnim.spin){o.rot+=(o.autoAnim.spinSpeed||90)*Math.PI/180*(1/60)}});
 // 繪製（反向=上層在後畫）
-[...objects].reverse().forEach(o=>{if(o.type==='group')return;const m=getWorldMatrix(o);let dx=0,dy=0;if(o.autoAnim&&o.autoAnim.shake){const str=o.autoAnim.shakeStrength||3,spd=o.autoAnim.shakeSpeed||20;dx=Math.sin(now*spd)*str;dy=Math.cos(now*spd*1.3)*str}ctx.save();ctx.setTransform(m[0],m[1],m[2],m[3],m[4]+dx,m[5]+dy);ctx.translate(-o.pivotX,-o.pivotY);const s=50;ctx.fillStyle=o.color;if(o.type==='image'&&imgs[o.id]){ctx.drawImage(imgs[o.id],-o.imgW/2,-o.imgH/2,o.imgW,o.imgH)}else if(o.type==='box'){ctx.fillRect(-s/2,-s/2,s,s)}else if(o.type==='circle'){ctx.beginPath();ctx.arc(0,0,s/2,0,Math.PI*2);ctx.fill()}if(o.text){ctx.save();const wm=getWorldMatrix(o);const wr=Math.atan2(wm[1],wm[0]);ctx.rotate(-wr);ctx.fillStyle='white';ctx.font='bold 13px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(o.text,0,0);ctx.restore()}ctx.restore()})}
+[...objects].reverse().forEach(o=>{if(o.type==='group')return;const m=getWorldMatrix(o);let dx=0,dy=0;if(o.autoAnim&&o.autoAnim.shake){const str=o.autoAnim.shakeStrength||3,spd=o.autoAnim.shakeSpeed||20;dx=Math.sin(now*spd)*str;dy=Math.cos(now*spd*1.3)*str}ctx.save();ctx.setTransform(m[0],m[1],m[2],m[3],m[4]+dx,m[5]+dy);ctx.translate(-o.pivotX,-o.pivotY);const s=50;ctx.fillStyle=o.color;if(o.type==='image'&&imgs[o.id]){ctx.drawImage(imgs[o.id],-o.imgW/2,-o.imgH/2,o.imgW,o.imgH)}else if(o.type==='box'){ctx.fillRect(-s/2,-s/2,s,s)}else if(o.type==='circle'){ctx.beginPath();ctx.arc(0,0,s/2,0,Math.PI*2);ctx.fill()}if(o.text){ctx.fillStyle='white';ctx.font='bold 13px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(o.text,0,0)}ctx.restore()})}
 let start=null;function loop(ts){if(!start)start=ts;const t=((ts-start)/1000)%duration;applyAnimation(t);draw();requestAnimationFrame(loop)}
 requestAnimationFrame(loop);
 <` + `/script></body></html>`;
@@ -1827,21 +1850,35 @@ stage.addEventListener('mousedown', (e) => {
   const mx = world.x, my = world.y;
 
   let targetObj = null, activeHandle = null;
+  let dragModeOverride = null;
 
-  if (transformMode === 'scale' || transformMode === 'rotate') {
-    const h = hitHandle(mx, my, transformMode);
-    if (h) { targetObj = h.obj; activeHandle = h.handle; }
-    else { const hit = hitTest(mx, my); if (hit && hit.id !== selectedId) { selectedId = hit.id; renderObjectList(); draw(); } return; }
+  if (transformMode === 'ts' || transformMode === 'tr') {
+    // 先檢查是否點到 handle
+    const handleMode = transformMode === 'ts' ? 'scale' : 'rotate';
+    const h = hitHandle(mx, my, handleMode);
+    if (h) {
+      targetObj = h.obj;
+      activeHandle = h.handle;
+      // handle 決定實際 dragMode
+      dragModeOverride = handleMode;
+    } else {
+      // 沒點到 handle → 檢查是否點到物件本體（= move）
+      const hit = hitTest(mx, my);
+      if (hit) { targetObj = hit; dragModeOverride = 'move'; }
+      else { selectedId = null; selectedIds = new Set(); renderObjectList(); draw(); updatePropertiesPanel(); return; }
+    }
   } else {
     const hit = hitTest(mx, my);
-    if (!hit) return;
+    if (!hit) { selectedId = null; selectedIds = new Set(); renderObjectList(); draw(); updatePropertiesPanel(); return; }
     targetObj = hit;
+    dragModeOverride = 'move';
   }
 
   // 多選邏輯：延遲切換（只有 click 不拖曳才切換，避免誤觸）
+  // Shift 多選只在拖曳本體（move）時觸發，handle 操作時 Shift 是功能鍵
   let pendingSelectionSwitch = null;
-  if (shiftHeld) {
-    // Shift 立即生效
+  if (shiftHeld && dragModeOverride === 'move') {
+    // Shift+Click 多選（只在 Move 模式）
     if (selectedIds.has(targetObj.id)) {
       selectedIds.delete(targetObj.id);
       if (selectedId === targetObj.id) selectedId = selectedIds.size > 0 ? [...selectedIds][0] : null;
@@ -1850,15 +1887,12 @@ stage.addEventListener('mousedown', (e) => {
       selectedId = targetObj.id;
     }
   } else if (!selectedIds.has(targetObj.id)) {
-    // 點到未選中的物件 → 延遲到 mouseup 才切換（防止拖曳時誤切）
     pendingSelectionSwitch = targetObj.id;
-    // 暫時加入選取讓拖曳能動（如果最終是拖曳就保持，如果是 click 就切換成單選）
     selectedId = targetObj.id;
     selectedIds.add(targetObj.id);
   } else {
     selectedId = targetObj.id;
   }
-  // 記錄 pending switch 到 dragObjStart 裡
   window._pendingSelSwitch = pendingSelectionSwitch;
   window._dragDidMove = false;
   updatePropertiesPanel();
@@ -1887,9 +1921,9 @@ stage.addEventListener('mousedown', (e) => {
     startDist:Math.sqrt(dx0*dx0+dy0*dy0),
     handle:activeHandle,
     // 多選：記錄所有選中物件的起始位置
-    multiStart: [...selectedIds].map(id => { const o = getObj(id); return o ? { id, x: o.x, y: o.y } : null; }).filter(Boolean)
+    multiStart: [...selectedIds].map(id => { const o = getObj(id); return o ? { id, x: o.x, y: o.y, scaleX: o.scaleX, scaleY: o.scaleY, rot: o.rot } : null; }).filter(Boolean)
   };
-  dragMode = transformMode;
+  dragMode = dragModeOverride || transformMode;
   updateModeIndicator(); draw();
 });
 
@@ -1921,12 +1955,9 @@ stage.addEventListener('mousemove', (e) => {
   } else if (dragMode === 'rotate') {
     const dx=mx-dragObjStart.pivotWorldX, dy=my-dragObjStart.pivotWorldY;
     const currentAngle = Math.atan2(dy, dx);
-    // 計算相對於上一幀的角度差（避免 atan2 跨 ±π 跳變）
     let delta = currentAngle - dragObjStart.startAngle;
-    // Normalize delta to -π..π
     while (delta > Math.PI) delta -= Math.PI * 2;
     while (delta < -Math.PI) delta += Math.PI * 2;
-    // 累積到 prevAngle 追蹤
     if (dragObjStart._prevAngle === undefined) {
       dragObjStart._prevAngle = currentAngle;
       dragObjStart._accumDelta = delta;
@@ -1937,8 +1968,40 @@ stage.addEventListener('mousemove', (e) => {
       dragObjStart._accumDelta += frameDelta;
       dragObjStart._prevAngle = currentAngle;
     }
-    obj.rot = dragObjStart.rot + dragObjStart._accumDelta;
-    if (shiftHeld) { const step=Math.PI/12; obj.rot=Math.round(obj.rot/step)*step; }
+    let finalRot = dragObjStart.rot + dragObjStart._accumDelta;
+    if (shiftHeld) { const step=Math.PI/12; finalRot=Math.round(finalRot/step)*step; }
+    obj.rot = finalRot;
+
+    // 多選旋轉
+    if (selectedIds.size > 1 && dragObjStart.multiStart) {
+      const angleDelta = finalRot - dragObjStart.rot;
+      if (rotateSpace === 'local') {
+        // Local：每個物件繞自己中心旋轉
+        dragObjStart.multiStart.forEach(ms => {
+          if (ms.id === obj.id) return;
+          const o = getObj(ms.id);
+          if (!o) return;
+          o.rot = (ms.rot || 0) + angleDelta;
+        });
+      } else {
+        // Global：所有物件繞多選中心旋轉
+        // 計算多選中心
+        let sumX = 0, sumY = 0, count = 0;
+        dragObjStart.multiStart.forEach(ms => { sumX += ms.x; sumY += ms.y; count++; });
+        const gcx = sumX / count, gcy = sumY / count;
+        const cos = Math.cos(angleDelta), sin = Math.sin(angleDelta);
+        dragObjStart.multiStart.forEach(ms => {
+          if (ms.id === obj.id) return;
+          const o = getObj(ms.id);
+          if (!o) return;
+          // 繞中心旋轉位置
+          const rx = ms.x - gcx, ry = ms.y - gcy;
+          o.x = gcx + rx * cos - ry * sin;
+          o.y = gcy + rx * sin + ry * cos;
+          o.rot = (ms.rot || 0) + angleDelta;
+        });
+      }
+    }
   } else if (dragMode === 'scale') {
     const handle=dragObjStart.handle;
     const allowX=!(handle==='t'||handle==='b'), allowY=!(handle==='l'||handle==='r');
@@ -1953,6 +2016,23 @@ stage.addEventListener('mousemove', (e) => {
     if (shiftHeld) { if(allowX&&allowY){const r=Math.abs(ratioX)>Math.abs(ratioY)?ratioX:ratioY;ratioX=r;ratioY=r;} else if(allowX){ratioY=ratioX;} else if(allowY){ratioX=ratioY;} }
     obj.scaleX=Math.max(0.05, dragObjStart.scaleX*ratioX);
     obj.scaleY=Math.max(0.05, dragObjStart.scaleY*ratioY);
+    // 多選：其他選中物件也等比縮放 + 位置從中心縮放
+    if (selectedIds.size > 1 && dragObjStart.multiStart) {
+      // 計算多選中心
+      let sumX = 0, sumY = 0, count = 0;
+      dragObjStart.multiStart.forEach(ms => { sumX += ms.x; sumY += ms.y; count++; });
+      const gcx = sumX / count, gcy = sumY / count;
+      dragObjStart.multiStart.forEach(ms => {
+        if (ms.id === obj.id) return;
+        const o = getObj(ms.id);
+        if (!o) return;
+        o.scaleX = Math.max(0.05, (ms.scaleX || 1) * ratioX);
+        o.scaleY = Math.max(0.05, (ms.scaleY || 1) * ratioY);
+        // 位置也從中心等比縮放
+        o.x = gcx + (ms.x - gcx) * ratioX;
+        o.y = gcy + (ms.y - gcy) * ratioY;
+      });
+    }
   } else if (dragMode === 'pivot') {
     const m=getWorldMatrix(obj); const invM=invMatrix(m);
     obj.pivotX=dragObjStart.pivotX+invM[0]*dxWorld+invM[2]*dyWorld;
@@ -2076,17 +2156,66 @@ textEditor.addEventListener('keydown', (e) => {
   requestAnimationFrame(() => { const obj=getObj(editingTextId); if(obj) positionTextEditor(obj); });
 });
 
+// ============================================================
+// 複製/貼上
+// ============================================================
+let clipboard = [];
+
+function copySelected() {
+  clipboard = [];
+  selectedIds.forEach(id => {
+    const obj = getObj(id);
+    if (!obj) return;
+    // 深拷貝（排除 imgEl）
+    const copy = JSON.parse(JSON.stringify(obj));
+    delete copy.imgEl;
+    clipboard.push(copy);
+  });
+}
+
+function pasteObjects() {
+  if (clipboard.length === 0) return;
+  const newIds = new Set();
+  clipboard.forEach(src => {
+    const id = nextId++;
+    const obj = {
+      ...src,
+      id,
+      name: src.name + ' copy',
+      x: src.x + 20,
+      y: src.y + 20,
+      imgEl: null,
+      tracks: { translate: [], rotate: [], scale: [] }, // 不複製動畫
+    };
+    if (obj.imgSrc) {
+      const img = new Image();
+      img.onload = () => { obj.imgEl = img; draw(); };
+      img.src = obj.imgSrc;
+    }
+    objects.push(obj);
+    newIds.add(id);
+  });
+  selectedId = [...newIds][0];
+  selectedIds = newIds;
+  renderObjectList();
+  draw();
+  snapshot('paste');
+}
+
 // 鍵盤
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Shift') shiftHeld = true;
   if ((e.ctrlKey||e.metaKey)&&(e.key==='z'||e.key==='Z')) { if(editingTextId!==null) return; e.preventDefault(); if(e.shiftKey) redo(); else undo(); return; }
   if ((e.ctrlKey||e.metaKey)&&(e.key==='y'||e.key==='Y')) { if(editingTextId!==null) return; e.preventDefault(); redo(); return; }
+  // Ctrl+C 複製 / Ctrl+V 貼上
+  if ((e.ctrlKey||e.metaKey)&&(e.key==='c'||e.key==='C')) { if(editingTextId!==null) return; e.preventDefault(); copySelected(); return; }
+  if ((e.ctrlKey||e.metaKey)&&(e.key==='v'||e.key==='V')) { if(editingTextId!==null) return; e.preventDefault(); pasteObjects(); return; }
   if (e.target.tagName === 'INPUT') return;
   if (editingTextId !== null) return;
-  if (e.key==='q'||e.key==='Q') { transformMode='move'; updateModeIndicator(); draw(); return; }
-  if (e.key==='w'||e.key==='W') { transformMode='rotate'; updateModeIndicator(); draw(); return; }
-  if (e.key==='e'||e.key==='E') { transformMode='scale'; updateModeIndicator(); draw(); return; }
+  if (e.key==='q'||e.key==='Q') { transformMode='ts'; updateModeIndicator(); draw(); return; }
+  if (e.key==='w'||e.key==='W') { transformMode='tr'; updateModeIndicator(); draw(); return; }
   if (e.key==='p'||e.key==='P') { transformMode='pivot'; updateModeIndicator(); draw(); return; }
+  if (e.key==='g'||e.key==='G') { rotateSpace = rotateSpace === 'global' ? 'local' : 'global'; updateModeIndicator(); return; }
   if (e.key==='Delete'||e.key==='Backspace') { if(selectedId&&!recording&&!playing){const obj=getSelected();if(obj&&confirm(`刪除 ${obj.name}？`))deleteObject(obj.id);} }
   if (e.key===' ') { e.preventDefault(); if(!recording) togglePlay(); }
   if (e.key==='F2') { e.preventDefault(); recordBtn.click(); }
@@ -2097,15 +2226,16 @@ window.addEventListener('keyup', (e) => { if (e.key==='Shift') shiftHeld=false; 
 
 function updateModeIndicator() {
   modeIndicator.className = 'mode-indicator show';
-  const modeLabel = {move:'MOVE (Q)',rotate:'ROTATE (W)',scale:'SCALE (E)',pivot:'PIVOT (P)'}[transformMode];
+  const modeLabel = {ts:'T+S (Q)', tr:'T+R (W)', pivot:'PIVOT (P)'}[transformMode] || transformMode;
+  const spaceLabel = transformMode === 'tr' ? ` [${rotateSpace === 'global' ? 'G' : 'L'}]` : '';
   if (recording) {
     modeIndicator.classList.add('recording');
     if (recordArmed) modeIndicator.textContent = '● ARMED — '+modeLabel+' — 拖物件開始';
     else if (recordSegmentStart>0&&dragMode) modeIndicator.textContent = '● REC '+currentTime.toFixed(2)+'s '+getObj(recordingObjectId).name+' ('+dragMode+')';
     else modeIndicator.textContent = '❚❚ PAUSED '+currentTime.toFixed(2)+'s — '+modeLabel;
   } else {
-    modeIndicator.classList.add(transformMode);
-    modeIndicator.textContent = modeLabel;
+    modeIndicator.classList.add(transformMode === 'ts' ? 'move' : transformMode === 'tr' ? 'rotate' : 'pivot');
+    modeIndicator.textContent = modeLabel + spaceLabel;
   }
   updateCursor();
 }
