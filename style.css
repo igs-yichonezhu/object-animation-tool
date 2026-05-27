@@ -155,3 +155,7 @@ body {
 .tl-zoom-label { font-size: 12px; color: #666; }
 .tl-zoom-slider { flex: 1; height: 4px; accent-color: #3fa37a; cursor: pointer; }
 .tl-zoom-value { font-size: 10px; color: #888; min-width: 30px; }
+
+/* 拖放插入指示線 */
+.object-item.drop-before { border-top: 2px solid #3fa37a !important; }
+.object-item.drop-after { border-bottom: 2px solid #3fa37a !important; }
