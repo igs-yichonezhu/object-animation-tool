@@ -6,6 +6,7 @@
 <link rel="stylesheet" href="style.css">
 <script src="psd.min.js"></script>
 <script src="mp4-muxer.min.js"></script>
+<script src="jszip.min.js"></script>
 </head>
 <body>
 
@@ -62,6 +63,10 @@
       <div class="prop-row"><span class="prop-label">Size</span><input class="prop-input" id="propFontSize" type="number" value="12" min="4" max="200" step="1"><span style="color:#666;font-size:10px;margin-left:4px">pt</span></div>
     </div>
     <div class="prop-section">
+      <div class="prop-section-title">Display</div>
+      <label class="prop-checkbox"><input type="checkbox" id="showCurve"> 顯示軌跡 (Curve)</label>
+    </div>
+    <div class="prop-section">
       <div class="prop-section-title">Auto Animation</div>
       <label class="prop-checkbox"><input type="checkbox" id="autoShake"> 震動 (Shake)</label>
       <div class="prop-row" id="shakeOpts" style="display:none;margin-top:6px">
@@ -91,12 +96,14 @@
       <input type="range" id="smoothSlider" min="1" max="20" value="5" class="tl-slider">
       <span id="smoothValue">5</span>
     </label>
+    <label class="prop-checkbox" style="font-size:11px;color:#888"><input type="checkbox" id="showKeysCheckbox"> Keys</label>
     <button class="tl-btn" id="clearBtn">Clear Tracks</button>
     <button class="tl-btn" id="importBtn">📂 Import</button>
     <input type="file" id="importFileInput" accept=".json" style="display:none">
     <button class="tl-btn" id="exportBtn" disabled>Export JSON</button>
     <button class="tl-btn" id="exportHtmlBtn" disabled>Export HTML</button>
     <button class="tl-btn" id="exportVideoBtn" disabled>🎬 Video</button>
+    <button class="tl-btn" id="exportUnityBtn" disabled>🎮 Unity</button>
     <button class="tl-btn" id="clearSelectedBtn">Clear Selected</button>
     <div class="tl-info">Time<span id="timeReadout">0.00s</span> / <span id="durationReadout">0.00s</span></div>
   </div>
@@ -154,6 +161,7 @@ let dragStartX = 0, dragStartY = 0;
 let dragObjStart = null;
 let transformMode = 'ts'; // 'ts' = Transform+Scale, 'tr' = Transform+Rotate, 'pivot'
 let rotateSpace = 'global'; // 'local' = 各自繞自己中心, 'global' = 繞多選中心
+let showCurve = false; // 顯示選中物件的移動軌跡
 let editingTextId = null;
 
 let listDragId = null;
@@ -798,6 +806,56 @@ function draw() {
     sCtx.restore();
   });
 
+  // Curve 軌跡顯示（Catmull-Rom 平滑曲線 + 熱力圖）
+  if (showCurve) {
+    selectedIds.forEach(id => {
+      const obj = getObj(id);
+      if (!obj || obj.tracks.translate.length < 2) return;
+      const keys = obj.tracks.translate;
+      // 計算最大速度（用於正規化）
+      let maxSpd = 0;
+      for (let j = 1; j < keys.length; j++) {
+        const dt = keys[j].t - keys[j-1].t;
+        if (dt <= 0.001) continue;
+        const dx = keys[j].x - keys[j-1].x, dy = keys[j].y - keys[j-1].y;
+        const spd = Math.sqrt(dx*dx + dy*dy) / dt;
+        if (spd > maxSpd) maxSpd = spd;
+      }
+      const normSpd = maxSpd * 0.7 || 1;
+
+      // 用 Catmull-Rom 畫平滑曲線（每段細分 10 步）
+      const steps = 10;
+      for (let j = 0; j < keys.length - 1; j++) {
+        const i0 = Math.max(0, j - 1);
+        const i1 = j, i2 = j + 1;
+        const i3 = Math.min(keys.length - 1, j + 2);
+        // 這段的速度（用於顏色）
+        const dt = keys[i2].t - keys[i1].t;
+        const dx = keys[i2].x - keys[i1].x, dy = keys[i2].y - keys[i1].y;
+        const spd = dt > 0.001 ? Math.sqrt(dx*dx + dy*dy) / dt : 0;
+        sCtx.strokeStyle = speedToColor(spd, normSpd);
+        sCtx.lineWidth = 2.5 / stageZoom;
+        sCtx.beginPath();
+        for (let s = 0; s <= steps; s++) {
+          const u = s / steps;
+          const px = catmullRom(keys[i0].x, keys[i1].x, keys[i2].x, keys[i3].x, u);
+          const py = catmullRom(keys[i0].y, keys[i1].y, keys[i2].y, keys[i3].y, u);
+          if (s === 0) sCtx.moveTo(px, py); else sCtx.lineTo(px, py);
+        }
+        sCtx.stroke();
+      }
+      // 畫 keyframe 點
+      keys.forEach((k, idx) => {
+        sCtx.fillStyle = idx === 0 ? '#3fa37a' : idx === keys.length-1 ? '#e74c3c' : 'white';
+        sCtx.beginPath();
+        sCtx.arc(k.x, k.y, 4 / stageZoom, 0, Math.PI * 2);
+        sCtx.fill();
+        sCtx.strokeStyle = '#000'; sCtx.lineWidth = 1 / stageZoom;
+        sCtx.stroke();
+      });
+    });
+  }
+
   // 選中框（每個選中物件）
   objects.forEach(obj => {
     if (!selectedIds.has(obj.id) && !(recording && obj.id === recordingObjectId)) return;
@@ -902,6 +960,45 @@ function draw() {
   drawTimeline();
 }
 
+// 速度 → 熱力圖顏色（慢=靛藍, 中=亮綠, 快=亮紅）
+function speedToColor(speed, maxSpeed) {
+  const t = Math.min(1, speed / (maxSpeed || 1)); // 0~1 正規化
+  // 靛藍(0) → 亮綠(0.4) → 橘(0.7) → 亮紅(1)
+  let r, g, b;
+  if (t < 0.4) {
+    const u = t / 0.4;
+    r = Math.round(30 * (1 - u)); g = Math.round(50 + 180 * u); b = Math.round(180 * (1 - u));
+  } else if (t < 0.7) {
+    const u = (t - 0.4) / 0.3;
+    r = Math.round(255 * u); g = Math.round(230 * (1 - u * 0.5)); b = 0;
+  } else {
+    const u = (t - 0.7) / 0.3;
+    r = 255; g = Math.round(115 * (1 - u)); b = Math.round(30 * (1 - u));
+  }
+  return `rgb(${r},${g},${b})`;
+}
+
+function getTrackSpeed(keys, idx) {
+  if (keys.length < 2 || idx <= 0) return 0;
+  // 用前後 3 個 key 的滑動窗口平均速度（更平滑）
+  const windowSize = 3;
+  let totalDist = 0, totalDt = 0;
+  for (let i = Math.max(1, idx - windowSize); i <= Math.min(keys.length - 1, idx + windowSize); i++) {
+    const prev = keys[i - 1], cur = keys[i];
+    const dt = cur.t - prev.t;
+    if (dt <= 0.001) continue;
+    const numKeys = Object.keys(cur).filter(k => k !== 't');
+    if (numKeys.includes('x') && numKeys.includes('y')) {
+      const dx = (cur.x || 0) - (prev.x || 0), dy = (cur.y || 0) - (prev.y || 0);
+      totalDist += Math.sqrt(dx * dx + dy * dy);
+    } else {
+      for (const k of numKeys) totalDist += Math.abs((cur[k] || 0) - (prev[k] || 0));
+    }
+    totalDt += dt;
+  }
+  return totalDt > 0.001 ? totalDist / totalDt : 0;
+}
+
 function drawTimeline() {
   if (!tlSize) return;
   tCtx.clearRect(0, 0, tlSize.w, tlSize.h);
@@ -911,48 +1008,83 @@ function drawTimeline() {
   const duration = Math.max(tlViewDuration, currentTime, 1);
   durationReadout.textContent = duration.toFixed(2) + 's';
 
+  // 時間刻度
   const padTop = 18;
-  tCtx.fillStyle = '#666'; tCtx.font = '10px monospace'; tCtx.textAlign = 'left';
-  const tickInterval = duration > 5 ? 1 : 0.5;
+  tCtx.fillStyle = '#555'; tCtx.font = '10px monospace'; tCtx.textAlign = 'left';
+  const tickInterval = duration > 10 ? 2 : duration > 5 ? 1 : 0.5;
   for (let t = 0; t <= duration; t += tickInterval) {
-    const x = (t/duration)*tlSize.w;
-    tCtx.strokeStyle = '#2a2a2a'; tCtx.beginPath(); tCtx.moveTo(x,0); tCtx.lineTo(x,tlSize.h); tCtx.stroke();
-    tCtx.fillText(t.toFixed(1)+'s', x+3, 12);
+    const x = (t / duration) * tlSize.w;
+    tCtx.strokeStyle = '#222'; tCtx.lineWidth = 1;
+    tCtx.beginPath(); tCtx.moveTo(x, 0); tCtx.lineTo(x, tlSize.h); tCtx.stroke();
+    tCtx.fillText(t.toFixed(1) + 's', x + 3, 12);
   }
 
-  // 每個有軌道的物件顯示 3 條子軌（T/R/S）
+  // 熱力圖軌道
   const trackObjs = objects.filter(o => o.tracks.translate.length > 0 || o.tracks.rotate.length > 0 || o.tracks.scale.length > 0);
-  const subTrackH = 5;
-  const objBandH = subTrackH * 3 + 6; // 3 sub-tracks + padding
+  const subTrackH = 8;
+  const objBandH = subTrackH * 3 + 14;
   const startY = padTop;
 
   trackObjs.forEach((obj, i) => {
     const baseY = startY + i * objBandH;
-    // 物件名稱背景
-    tCtx.fillStyle = obj.color + '12';
+    tCtx.fillStyle = obj.color + '08';
     tCtx.fillRect(0, baseY, tlSize.w, objBandH - 2);
     tCtx.fillStyle = '#aaa'; tCtx.font = '9px sans-serif';
-    tCtx.fillText(obj.name, 4, baseY + 9);
+    tCtx.fillText(obj.name, 4, baseY + 10);
 
     const subTracks = [
-      { keys: obj.tracks.translate, color: '#3fa37a', label: 'T' },
-      { keys: obj.tracks.rotate, color: '#f39c12', label: 'R' },
-      { keys: obj.tracks.scale, color: '#9b59b6', label: 'S' },
+      { keys: obj.tracks.translate, label: 'T' },
+      { keys: obj.tracks.rotate, label: 'R' },
+      { keys: obj.tracks.scale, label: 'S' },
     ];
+
     subTracks.forEach((st, si) => {
-      const sy = baseY + 12 + si * (subTrackH + 1);
-      // 軌道底色
-      tCtx.fillStyle = st.color + '18';
-      tCtx.fillRect(50, sy, tlSize.w - 50, subTrackH);
-      // label
-      tCtx.fillStyle = st.color; tCtx.font = '8px monospace';
-      tCtx.fillText(st.label, 42, sy + subTrackH - 1);
-      // keyframes
-      st.keys.forEach(k => {
-        const x = (k.t / duration) * (tlSize.w - 50) + 50;
-        tCtx.fillStyle = st.color;
-        tCtx.fillRect(x - 1, sy, 2, subTrackH);
-      });
+      const sy = baseY + 13 + si * (subTrackH + 1);
+      const keys = st.keys;
+
+      if (keys.length < 2) {
+        tCtx.fillStyle = '#1a1a1a';
+        tCtx.fillRect(0, sy, tlSize.w, subTrackH);
+        keys.forEach(k => {
+          const x = (k.t / duration) * tlSize.w;
+          tCtx.fillStyle = '#3fa37a';
+          tCtx.beginPath(); tCtx.arc(x, sy + subTrackH / 2, 3, 0, Math.PI * 2); tCtx.fill();
+        });
+        return;
+      }
+
+      // 計算最大速度（用於正規化，忽略極小值）
+      let maxSpd = 0;
+      const speeds = [0];
+      for (let j = 1; j < keys.length; j++) {
+        const spd = getTrackSpeed(keys, j);
+        speeds.push(spd);
+        if (spd > maxSpd) maxSpd = spd;
+      }
+      // 用 75th percentile 作為正規化基準（避免極端值壓縮其他顏色）
+      const sortedSpeeds = [...speeds].filter(s => s > 0).sort((a, b) => a - b);
+      const normSpd = sortedSpeeds.length > 0 ? sortedSpeeds[Math.floor(sortedSpeeds.length * 0.75)] * 1.5 : 1;
+
+      // 繪製熱力圖色帶
+      for (let j = 1; j < keys.length; j++) {
+        const x0 = (keys[j - 1].t / duration) * tlSize.w;
+        const x1 = (keys[j].t / duration) * tlSize.w;
+        const color = speedToColor(speeds[j], normSpd);
+        tCtx.fillStyle = color;
+        tCtx.fillRect(x0, sy, Math.max(1, x1 - x0), subTrackH);
+      }
+
+      // Keyframe 菱形標記（受 Show Keys checkbox 控制）
+      if (document.getElementById('showKeysCheckbox').checked) {
+        keys.forEach(k => {
+          const x = (k.t / duration) * tlSize.w;
+          tCtx.fillStyle = 'white';
+          tCtx.beginPath();
+          tCtx.moveTo(x, sy); tCtx.lineTo(x + 3, sy + subTrackH / 2);
+          tCtx.lineTo(x, sy + subTrackH); tCtx.lineTo(x - 3, sy + subTrackH / 2);
+          tCtx.closePath(); tCtx.fill();
+        });
+      }
     });
   });
 
@@ -960,24 +1092,21 @@ function drawTimeline() {
   if (loopRangeEnabled) {
     const lsX = (loopRangeStart / duration) * tlSize.w;
     const leX = (loopRangeEnd / duration) * tlSize.w;
-    tCtx.fillStyle = 'rgba(63, 163, 122, 0.08)';
+    tCtx.fillStyle = 'rgba(63, 163, 122, 0.06)';
     tCtx.fillRect(lsX, 0, leX - lsX, tlSize.h);
-    tCtx.strokeStyle = '#3fa37a'; tCtx.lineWidth = 2;
-    tCtx.setLineDash([]);
-    // 左括號
-    tCtx.beginPath(); tCtx.moveTo(lsX+6, 0); tCtx.lineTo(lsX, 0); tCtx.lineTo(lsX, tlSize.h); tCtx.lineTo(lsX+6, tlSize.h); tCtx.stroke();
-    // 右括號
-    tCtx.beginPath(); tCtx.moveTo(leX-6, 0); tCtx.lineTo(leX, 0); tCtx.lineTo(leX, tlSize.h); tCtx.lineTo(leX-6, tlSize.h); tCtx.stroke();
+    tCtx.strokeStyle = '#3fa37a'; tCtx.lineWidth = 2; tCtx.setLineDash([]);
+    tCtx.beginPath(); tCtx.moveTo(lsX + 6, 0); tCtx.lineTo(lsX, 0); tCtx.lineTo(lsX, tlSize.h); tCtx.lineTo(lsX + 6, tlSize.h); tCtx.stroke();
+    tCtx.beginPath(); tCtx.moveTo(leX - 6, 0); tCtx.lineTo(leX, 0); tCtx.lineTo(leX, tlSize.h); tCtx.lineTo(leX - 6, tlSize.h); tCtx.stroke();
   }
 
-  const playX = (currentTime/duration)*tlSize.w;
+  // Playhead
+  const playX = (currentTime / duration) * tlSize.w;
   tCtx.strokeStyle = recording ? '#e74c3c' : '#3fa37a'; tCtx.lineWidth = 2;
-  tCtx.beginPath(); tCtx.moveTo(playX,0); tCtx.lineTo(playX,tlSize.h); tCtx.stroke();
+  tCtx.beginPath(); tCtx.moveTo(playX, 0); tCtx.lineTo(playX, tlSize.h); tCtx.stroke();
   tCtx.fillStyle = recording ? '#e74c3c' : '#3fa37a';
-  tCtx.beginPath(); tCtx.moveTo(playX-4,0); tCtx.lineTo(playX+4,0); tCtx.lineTo(playX,6); tCtx.closePath(); tCtx.fill();
+  tCtx.beginPath(); tCtx.moveTo(playX - 5, 0); tCtx.lineTo(playX + 5, 0); tCtx.lineTo(playX, 8); tCtx.closePath(); tCtx.fill();
   timeReadout.textContent = currentTime.toFixed(2) + 's';
 }
-
 // ============================================================
 // interaction.js — 命中測試 + 游標
 // ============================================================
@@ -1166,7 +1295,7 @@ function stopRecording() {
   stopBtn.disabled = true;
   recomputeMaxDuration();
   const hasAny = objects.some(o => o.tracks.translate.length > 0 || o.tracks.rotate.length > 0 || o.tracks.scale.length > 0);
-  playBtn.disabled = !hasAny; exportBtn.disabled = !hasAny; document.getElementById('exportHtmlBtn').disabled = !hasAny; document.getElementById('exportVideoBtn').disabled = !hasAny;
+  playBtn.disabled = !hasAny; exportBtn.disabled = !hasAny; document.getElementById('exportHtmlBtn').disabled = !hasAny; document.getElementById('exportVideoBtn').disabled = !hasAny; document.getElementById('exportUnityBtn').disabled = !hasAny;
   renderObjectList(); updateModeIndicator(); draw();
   snapshot('record'); updateUndoUI();
 }
@@ -1226,11 +1355,10 @@ playBtn.onclick = togglePlay;
 function playLoop() {
   if (!playing) return;
   currentTime = playStartOffset + (performance.now()-playStartTime)/1000;
-  // Loop range bracket
-  const loopEnd = (loopEnabled && loopRangeEnabled) ? loopRangeEnd : maxDuration;
-  const loopStart = (loopEnabled && loopRangeEnabled) ? loopRangeStart : 0;
+  // Loop 邏輯
+  const loopEnd = maxDuration || 1;
   if (currentTime >= loopEnd) {
-    if (loopEnabled) { currentTime = loopStart; playStartTime = performance.now(); playStartOffset = loopStart; }
+    if (loopEnabled) { currentTime = 0; playStartTime = performance.now(); playStartOffset = 0; }
     else { currentTime = loopEnd; playing = false; playBtn.textContent = '▶ Play'; updateUndoUI(); }
   }
   applyAnimation(currentTime);
@@ -1238,54 +1366,62 @@ function playLoop() {
   if (playing) requestAnimationFrame(playLoop);
 }
 
+// Catmull-Rom 插值（自動平滑曲線）
+function catmullRom(p0, p1, p2, p3, t) {
+  // Catmull-Rom → cubic hermite
+  return 0.5 * (
+    (2 * p1) +
+    (-p0 + p2) * t +
+    (2*p0 - 5*p1 + 4*p2 - p3) * t*t +
+    (-p0 + 3*p1 - 3*p2 + p3) * t*t*t
+  );
+}
+
+function interpolateTrack(tr, t, valueKeys) {
+  if (tr.length === 0) return null;
+  if (t <= tr[0].t) return tr[0];
+  if (t >= tr[tr.length-1].t) return tr[tr.length-1];
+
+  // 找到當前段
+  let idx = 0;
+  for (let i = 0; i < tr.length-1; i++) {
+    if (t >= tr[i].t && t < tr[i+1].t) { idx = i; break; }
+  }
+
+  const u = (t - tr[idx].t) / (tr[idx+1].t - tr[idx].t);
+  const result = { t };
+
+  // 如果只有 2 個 key 或在邊界，用線性
+  if (tr.length <= 2) {
+    for (const k of valueKeys) result[k] = tr[idx][k] + (tr[idx+1][k] - tr[idx][k]) * u;
+    return result;
+  }
+
+  // Catmull-Rom：需要 4 個點 (p0, p1, p2, p3)
+  const i0 = Math.max(0, idx - 1);
+  const i1 = idx;
+  const i2 = idx + 1;
+  const i3 = Math.min(tr.length - 1, idx + 2);
+
+  for (const k of valueKeys) {
+    result[k] = catmullRom(tr[i0][k], tr[i1][k], tr[i2][k], tr[i3][k], u);
+  }
+  return result;
+}
+
 function applyAnimation(t) {
   objects.forEach(obj => {
-    // Translate track
     if (obj.tracks.translate.length > 0) {
-      const tr = obj.tracks.translate;
-      if (t <= tr[0].t) { obj.x = tr[0].x; obj.y = tr[0].y; }
-      else if (t >= tr[tr.length-1].t) { obj.x = tr[tr.length-1].x; obj.y = tr[tr.length-1].y; }
-      else {
-        for (let i = 0; i < tr.length-1; i++) {
-          if (t >= tr[i].t && t < tr[i+1].t) {
-            const u = (t-tr[i].t)/(tr[i+1].t-tr[i].t);
-            obj.x = tr[i].x + (tr[i+1].x-tr[i].x)*u;
-            obj.y = tr[i].y + (tr[i+1].y-tr[i].y)*u;
-            break;
-          }
-        }
-      }
+      const v = interpolateTrack(obj.tracks.translate, t, ['x', 'y']);
+      if (v) { obj.x = v.x; obj.y = v.y; }
     }
-    // Rotate track
     if (obj.tracks.rotate.length > 0) {
-      const tr = obj.tracks.rotate;
-      if (t <= tr[0].t) { obj.rot = tr[0].rot; }
-      else if (t >= tr[tr.length-1].t) { obj.rot = tr[tr.length-1].rot; }
-      else {
-        for (let i = 0; i < tr.length-1; i++) {
-          if (t >= tr[i].t && t < tr[i+1].t) {
-            const u = (t-tr[i].t)/(tr[i+1].t-tr[i].t);
-            obj.rot = tr[i].rot + (tr[i+1].rot-tr[i].rot)*u;
-            break;
-          }
-        }
-      }
+      const v = interpolateTrack(obj.tracks.rotate, t, ['rot']);
+      if (v) obj.rot = v.rot;
     }
-    // Scale track
     if (obj.tracks.scale.length > 0) {
-      const tr = obj.tracks.scale;
-      if (t <= tr[0].t) { obj.scaleX = tr[0].scaleX; obj.scaleY = tr[0].scaleY; }
-      else if (t >= tr[tr.length-1].t) { obj.scaleX = tr[tr.length-1].scaleX; obj.scaleY = tr[tr.length-1].scaleY; }
-      else {
-        for (let i = 0; i < tr.length-1; i++) {
-          if (t >= tr[i].t && t < tr[i+1].t) {
-            const u = (t-tr[i].t)/(tr[i+1].t-tr[i].t);
-            obj.scaleX = tr[i].scaleX + (tr[i+1].scaleX-tr[i].scaleX)*u;
-            obj.scaleY = tr[i].scaleY + (tr[i+1].scaleY-tr[i].scaleY)*u;
-            break;
-          }
-        }
-      }
+      const v = interpolateTrack(obj.tracks.scale, t, ['scaleX', 'scaleY']);
+      if (v) { obj.scaleX = v.scaleX; obj.scaleY = v.scaleY; }
     }
   });
 }
@@ -1504,7 +1640,7 @@ document.getElementById('importFileInput').onchange = (e) => {
       const hasAny = objects.some(o => o.tracks.translate.length > 0 || o.tracks.rotate.length > 0 || o.tracks.scale.length > 0);
       playBtn.disabled = !hasAny;
       exportBtn.disabled = !hasAny;
-      document.getElementById('exportHtmlBtn').disabled = !hasAny; document.getElementById('exportVideoBtn').disabled = !hasAny;
+      document.getElementById('exportHtmlBtn').disabled = !hasAny; document.getElementById('exportVideoBtn').disabled = !hasAny; document.getElementById('exportUnityBtn').disabled = !hasAny;
 
       renderObjectList();
       draw();
@@ -1713,6 +1849,149 @@ document.getElementById('exportVideoBtn').onclick = async () => {
 };
 
 // ============================================================
+// Export Unity — 生成 UI Prefab + .anim + .controller（2D Canvas/Image）
+// ============================================================
+document.getElementById('exportUnityBtn').onclick = async () => {
+  const dur = maxDuration || 1;
+  let fileIdCounter = 1000000000000000;
+  function newFileId() { return ++fileIdCounter; }
+  function newGuid() { return 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'.replace(/x/g, () => Math.floor(Math.random()*16).toString(16)); }
+
+  function getObjPath(obj) {
+    // Unity animation path 是相對於 Animator 所在的 GameObject（Canvas）
+    const parts = [];
+    let cur = obj;
+    while (cur) {
+      parts.unshift(cur.name.replace(/[^\w\s-]/g, ''));
+      cur = cur.parentId ? getObj(cur.parentId) : null;
+    }
+    return parts.join('/');
+  }
+
+  const animGuid = newGuid();
+  const controllerGuid = newGuid();
+  const prefabGuid = newGuid();
+  const spriteGuids = {}; // obj.id → guid for sprite
+
+  // ============ 生成 Box/Circle 的 PNG 圖片 ============
+  const zip = new JSZip();
+  const folder = zip.folder('AnimatedExport');
+  const spritesFolder = folder.folder('Sprites');
+
+  for (const obj of objects) {
+    if (obj.type === 'group') continue;
+    const spriteGuid = newGuid();
+    spriteGuids[obj.id] = spriteGuid;
+
+    // 生成 PNG
+    const c = document.createElement('canvas');
+    const size = obj.type === 'image' ? Math.max(obj.imgW, obj.imgH) : 50;
+    c.width = Math.ceil(obj.type === 'image' ? obj.imgW : size);
+    c.height = Math.ceil(obj.type === 'image' ? obj.imgH : size);
+    const ctx = c.getContext('2d');
+    if (obj.type === 'image' && obj.imgEl) {
+      ctx.drawImage(obj.imgEl, 0, 0, c.width, c.height);
+    } else if (obj.type === 'box') {
+      ctx.fillStyle = obj.color;
+      ctx.fillRect(0, 0, c.width, c.height);
+      if (obj.text) { ctx.fillStyle = 'white'; ctx.font = `bold ${obj.fontSize||12}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(obj.text, c.width/2, c.height/2); }
+    } else {
+      ctx.fillStyle = obj.color;
+      ctx.beginPath(); ctx.arc(c.width/2, c.height/2, c.width/2, 0, Math.PI*2); ctx.fill();
+      if (obj.text) { ctx.fillStyle = 'white'; ctx.font = `bold ${obj.fontSize||12}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(obj.text, c.width/2, c.height/2); }
+    }
+    // 轉 PNG blob
+    const pngData = c.toDataURL('image/png').split(',')[1];
+    const fileName = `${obj.name.replace(/[^\w-]/g, '_')}_${obj.id}.png`;
+    spritesFolder.file(fileName, pngData, { base64: true });
+    spritesFolder.file(fileName + '.meta', `fileFormatVersion: 2\nguid: ${spriteGuid}\nTextureImporter:\n  spriteMode: 1\n  spritePixelsPerUnit: 100\n  textureType: 8\n`);
+  }
+
+  // ============ .anim ============
+  function generateCurve(keys, valueKey, path, attribute, transform) {
+    let keyframes = '';
+    keys.forEach(k => {
+      let val = k[valueKey] || 0;
+      if (transform === 'negY') val = -val; // Unity Y 反轉
+      if (transform === 'rad2deg') val = val * 180 / Math.PI;
+      keyframes += `      - serializedVersion: 3\n        time: ${k.t.toFixed(4)}\n        value: ${val.toFixed(4)}\n        inSlope: 0\n        outSlope: 0\n        tangentMode: 0\n        weightedMode: 0\n        inWeight: 0.3333333\n        outWeight: 0.3333333\n`;
+    });
+    return `  - curve:\n      serializedVersion: 2\n      m_Curve:\n${keyframes}      m_PreInfinity: 2\n      m_PostInfinity: 2\n      m_RotationOrder: 4\n    attribute: ${attribute}\n    path: ${path}\n    classID: 224\n    script: {fileID: 0}\n    flags: 0\n`;
+  }
+
+  let curves = '';
+  objects.forEach(obj => {
+    if (obj.type === 'group') return;
+    const path = getObjPath(obj);
+    if (obj.tracks.translate.length > 0) {
+      curves += generateCurve(obj.tracks.translate, 'x', path, 'm_AnchoredPosition.x', null);
+      curves += generateCurve(obj.tracks.translate, 'y', path, 'm_AnchoredPosition.y', 'negY');
+    }
+    if (obj.tracks.rotate.length > 0) {
+      curves += generateCurve(obj.tracks.rotate, 'rot', path, 'localEulerAnglesRaw.z', 'rad2deg');
+    }
+    if (obj.tracks.scale.length > 0) {
+      curves += generateCurve(obj.tracks.scale, 'scaleX', path, 'm_LocalScale.x', null);
+      curves += generateCurve(obj.tracks.scale, 'scaleY', path, 'm_LocalScale.y', null);
+    }
+  });
+
+  const animYaml = `%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!74 &7400000\nAnimationClip:\n  m_ObjectHideFlags: 0\n  m_CorrespondingSourceObject: {fileID: 0}\n  m_PrefabInstance: {fileID: 0}\n  m_PrefabAsset: {fileID: 0}\n  m_Name: ExportedAnimation\n  serializedVersion: 7\n  m_Legacy: 0\n  m_Compressed: 0\n  m_UseHighQualityCurve: 1\n  m_RotationCurves: []\n  m_CompressedRotationCurves: []\n  m_EulerCurves: []\n  m_PositionCurves: []\n  m_ScaleCurves: []\n  m_FloatCurves:\n${curves}  m_PPtrCurves: []\n  m_SampleRate: 60\n  m_WrapMode: 0\n  m_Bounds:\n    m_Center: {x: 0, y: 0, z: 0}\n    m_Extent: {x: 0, y: 0, z: 0}\n  m_AnimationClipSettings:\n    serializedVersion: 2\n    m_AdditiveReferencePoseClip: {fileID: 0}\n    m_AdditiveReferencePoseTime: 0\n    m_StartTime: 0\n    m_StopTime: ${dur.toFixed(4)}\n    m_OrientationOffsetY: 0\n    m_Level: 0\n    m_CycleOffset: 0\n    m_HasAdditiveReferencePose: 0\n    m_LoopTime: 1\n    m_LoopBlend: 0\n    m_LoopBlendOrientation: 0\n    m_LoopBlendPositionY: 0\n    m_LoopBlendPositionXZ: 0\n    m_KeepOriginalOrientation: 0\n    m_KeepOriginalPositionY: 1\n    m_KeepOriginalPositionXZ: 0\n    m_HeightFromFeet: 0\n    m_Mirror: 0\n  m_EditorCurves:\n${curves}  m_EulerEditorCurves: []\n  m_HasGenericRootTransform: 0\n  m_HasMotionFloatCurves: 0\n  m_Events: []\n`;
+
+  // ============ .controller ============
+  const stateId = newFileId(), stateMachineId = newFileId();
+  const controllerYaml = `%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!91 &9100000\nAnimatorController:\n  m_ObjectHideFlags: 0\n  m_CorrespondingSourceObject: {fileID: 0}\n  m_PrefabInstance: {fileID: 0}\n  m_PrefabAsset: {fileID: 0}\n  m_Name: AnimatedController\n  serializedVersion: 5\n  m_AnimatorParameters: []\n  m_AnimatorLayers:\n  - serializedVersion: 5\n    m_Name: Base Layer\n    m_StateMachine: {fileID: ${stateMachineId}}\n    m_Mask: {fileID: 0}\n    m_Motions: []\n    m_Behaviours: []\n    m_BlendingMode: 0\n    m_SyncedLayerIndex: -1\n    m_DefaultWeight: 0\n    m_IKPass: 0\n    m_SyncedLayerAffectsTiming: 0\n    m_Controller: {fileID: 9100000}\n--- !u!1107 &${stateMachineId}\nAnimatorStateMachine:\n  serializedVersion: 6\n  m_ObjectHideFlags: 1\n  m_CorrespondingSourceObject: {fileID: 0}\n  m_PrefabInstance: {fileID: 0}\n  m_PrefabAsset: {fileID: 0}\n  m_Name: Base Layer\n  m_ChildStates:\n  - serializedVersion: 1\n    m_State: {fileID: ${stateId}}\n    m_Position: {x: 200, y: 0, z: 0}\n  m_ChildStateMachines: []\n  m_AnyStateTransitions: []\n  m_EntryTransitions: []\n  m_StateMachineTransitions: {}\n  m_StateMachineBehaviours: []\n  m_AnyStatePosition: {x: 50, y: 20, z: 0}\n  m_EntryPosition: {x: 50, y: 120, z: 0}\n  m_ExitPosition: {x: 800, y: 120, z: 0}\n  m_ParentStateMachinePosition: {x: 800, y: 20, z: 0}\n  m_DefaultState: {fileID: ${stateId}}\n--- !u!1102 &${stateId}\nAnimatorState:\n  serializedVersion: 6\n  m_ObjectHideFlags: 1\n  m_CorrespondingSourceObject: {fileID: 0}\n  m_PrefabInstance: {fileID: 0}\n  m_PrefabAsset: {fileID: 0}\n  m_Name: ExportedAnimation\n  m_Speed: 1\n  m_CycleOffset: 0\n  m_Transitions: []\n  m_StateMachineBehaviours: []\n  m_Position: {x: 50, y: 50, z: 0}\n  m_IKOnFeet: 0\n  m_WriteDefaultValues: 1\n  m_Mirror: 0\n  m_SpeedParameterActive: 0\n  m_MirrorParameterActive: 0\n  m_CycleOffsetParameterActive: 0\n  m_TimeParameterActive: 0\n  m_Motion: {fileID: 7400000, guid: ${animGuid}, type: 2}\n  m_Tag:\n  m_SpeedParameter:\n  m_MirrorParameter:\n  m_CycleOffsetParameter:\n  m_TimeParameter:\n`;
+
+  // ============ .prefab (UI Canvas + Image) ============
+  const canvasGoId = newFileId(), canvasRtId = newFileId(), canvasCompId = newFileId();
+  const scalerId = newFileId(), animatorId = newFileId(), raycasterID = newFileId();
+  const objIds = {}, rtIds = {}, imgIds = {};
+  objects.forEach(obj => { objIds[obj.id] = newFileId(); rtIds[obj.id] = newFileId(); if(obj.type!=='group') imgIds[obj.id] = newFileId(); });
+
+  let prefabYaml = `%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n`;
+  // Canvas root
+  const rootChildren = objects.filter(o => o.parentId === null).map(o => `  - {fileID: ${rtIds[o.id]}}`).join('\n');
+  prefabYaml += `--- !u!1 &${canvasGoId}\nGameObject:\n  m_ObjectHideFlags: 0\n  m_CorrespondingSourceObject: {fileID: 0}\n  m_PrefabInstance: {fileID: 0}\n  m_PrefabAsset: {fileID: 0}\n  serializedVersion: 6\n  m_Component:\n  - component: {fileID: ${canvasRtId}}\n  - component: {fileID: ${canvasCompId}}\n  - component: {fileID: ${scalerId}}\n  - component: {fileID: ${animatorId}}\n  m_Layer: 5\n  m_Name: AnimatedCanvas\n  m_TagString: Untagged\n  m_Icon: {fileID: 0}\n  m_NavMeshLayer: 0\n  m_StaticEditorFlags: 0\n  m_IsActive: 1\n`;
+  prefabYaml += `--- !u!224 &${canvasRtId}\nRectTransform:\n  m_ObjectHideFlags: 0\n  m_CorrespondingSourceObject: {fileID: 0}\n  m_PrefabInstance: {fileID: 0}\n  m_PrefabAsset: {fileID: 0}\n  m_GameObject: {fileID: ${canvasGoId}}\n  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}\n  m_LocalPosition: {x: 0, y: 0, z: 0}\n  m_LocalScale: {x: 1, y: 1, z: 1}\n  m_ConstrainProportionsScale: 0\n  m_Children:\n${rootChildren}\n  m_Father: {fileID: 0}\n  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}\n  m_AnchorMin: {x: 0, y: 0}\n  m_AnchorMax: {x: 0, y: 0}\n  m_AnchoredPosition: {x: 0, y: 0}\n  m_SizeDelta: {x: ${canvasFrame.w}, y: ${canvasFrame.h}}\n  m_Pivot: {x: 0.5, y: 0.5}\n`;
+  prefabYaml += `--- !u!223 &${canvasCompId}\nCanvas:\n  m_ObjectHideFlags: 0\n  m_CorrespondingSourceObject: {fileID: 0}\n  m_PrefabInstance: {fileID: 0}\n  m_PrefabAsset: {fileID: 0}\n  m_GameObject: {fileID: ${canvasGoId}}\n  m_Enabled: 1\n  serializedVersion: 3\n  m_RenderMode: 0\n  m_Camera: {fileID: 0}\n  m_PlaneDistance: 100\n  m_PixelPerfect: 0\n  m_ReceivesEvents: 1\n  m_OverrideSorting: 0\n  m_OverridePixelPerfect: 0\n  m_SortingBucketNormalizedSize: 0\n  m_VertexColorAlwaysGammaSpace: 0\n  m_AdditionalShaderChannelsFlag: 25\n  m_UpdateRectTransformForStandalone: 0\n  m_SortingLayerID: 0\n  m_SortingOrder: 0\n  m_TargetDisplay: 0\n`;
+  prefabYaml += `--- !u!114 &${scalerId}\nMonoBehaviour:\n  m_ObjectHideFlags: 0\n  m_CorrespondingSourceObject: {fileID: 0}\n  m_PrefabInstance: {fileID: 0}\n  m_PrefabAsset: {fileID: 0}\n  m_GameObject: {fileID: ${canvasGoId}}\n  m_Enabled: 1\n  m_EditorHideFlags: 0\n  m_Script: {fileID: 11500000, guid: 0cd44c1031e13a943bb63640046fad76, type: 3}\n  m_Name:\n  m_EditorClassIdentifier:\n  m_UiScaleMode: 1\n  m_ReferencePixelsPerUnit: 100\n  m_ScaleFactor: 1\n  m_ReferenceResolution: {x: ${canvasFrame.w}, y: ${canvasFrame.h}}\n  m_ScreenMatchMode: 0\n  m_MatchWidthOrHeight: 0.5\n  m_PhysicalUnit: 3\n  m_FallbackScreenDPI: 96\n  m_DefaultSpriteDPI: 96\n  m_DynamicPixelsPerUnit: 1\n  m_PresetInfoIsWorld: 0\n`;
+  prefabYaml += `--- !u!95 &${animatorId}\nAnimator:\n  m_ObjectHideFlags: 0\n  m_CorrespondingSourceObject: {fileID: 0}\n  m_PrefabInstance: {fileID: 0}\n  m_PrefabAsset: {fileID: 0}\n  m_GameObject: {fileID: ${canvasGoId}}\n  m_Enabled: 1\n  m_Avatar: {fileID: 0}\n  m_Controller: {fileID: 9100000, guid: ${controllerGuid}, type: 2}\n  m_CullingMode: 0\n  m_UpdateMode: 0\n  m_ApplyRootMotion: 0\n  m_LinearVelocityBlending: 0\n  m_StabilizeFeet: 0\n  m_HasTransformHierarchy: 1\n  m_AllowConstantClipSamplingOptimization: 1\n  m_KeepAnimatorStateOnDisable: 0\n  m_WriteDefaultValuesOnDisable: 1\n`;
+
+  // 子物件（Image + RectTransform）
+  objects.forEach(obj => {
+    const goId = objIds[obj.id];
+    const rtId = rtIds[obj.id];
+    const parentRtId = obj.parentId ? rtIds[obj.parentId] : canvasRtId;
+    const children = objects.filter(o => o.parentId === obj.id);
+    const childrenYaml = children.length > 0 ? children.map(c => `  - {fileID: ${rtIds[c.id]}}`).join('\n') : '  []';
+    const components = obj.type === 'group'
+      ? `  - component: {fileID: ${rtId}}`
+      : `  - component: {fileID: ${rtId}}\n  - component: {fileID: ${imgIds[obj.id]}}`;
+    const imgW = obj.type === 'image' ? obj.imgW : 50;
+    const imgH = obj.type === 'image' ? obj.imgH : 50;
+
+    prefabYaml += `--- !u!1 &${goId}\nGameObject:\n  m_ObjectHideFlags: 0\n  m_CorrespondingSourceObject: {fileID: 0}\n  m_PrefabInstance: {fileID: 0}\n  m_PrefabAsset: {fileID: 0}\n  serializedVersion: 6\n  m_Component:\n${components}\n  m_Layer: 5\n  m_Name: ${obj.name.replace(/[^\w\s-]/g, '')}\n  m_TagString: Untagged\n  m_Icon: {fileID: 0}\n  m_NavMeshLayer: 0\n  m_StaticEditorFlags: 0\n  m_IsActive: 1\n`;
+    prefabYaml += `--- !u!224 &${rtId}\nRectTransform:\n  m_ObjectHideFlags: 0\n  m_CorrespondingSourceObject: {fileID: 0}\n  m_PrefabInstance: {fileID: 0}\n  m_PrefabAsset: {fileID: 0}\n  m_GameObject: {fileID: ${goId}}\n  m_LocalRotation: {x: 0, y: 0, z: ${Math.sin(obj.rot/2).toFixed(6)}, w: ${Math.cos(obj.rot/2).toFixed(6)}}\n  m_LocalPosition: {x: 0, y: 0, z: 0}\n  m_LocalScale: {x: ${obj.scaleX.toFixed(4)}, y: ${obj.scaleY.toFixed(4)}, z: 1}\n  m_ConstrainProportionsScale: 0\n  m_Children:\n${childrenYaml}\n  m_Father: {fileID: ${parentRtId}}\n  m_LocalEulerAnglesHint: {x: 0, y: 0, z: ${(obj.rot*180/Math.PI).toFixed(4)}}\n  m_AnchorMin: {x: 0.5, y: 0.5}\n  m_AnchorMax: {x: 0.5, y: 0.5}\n  m_AnchoredPosition: {x: ${obj.x.toFixed(2)}, y: ${(-obj.y).toFixed(2)}}\n  m_SizeDelta: {x: ${imgW.toFixed(0)}, y: ${imgH.toFixed(0)}}\n  m_Pivot: {x: 0.5, y: 0.5}\n`;
+    if (obj.type !== 'group') {
+      prefabYaml += `--- !u!114 &${imgIds[obj.id]}\nMonoBehaviour:\n  m_ObjectHideFlags: 0\n  m_CorrespondingSourceObject: {fileID: 0}\n  m_PrefabInstance: {fileID: 0}\n  m_PrefabAsset: {fileID: 0}\n  m_GameObject: {fileID: ${goId}}\n  m_Enabled: 1\n  m_EditorHideFlags: 0\n  m_Script: {fileID: 11500000, guid: fe87c0e1cc204ed48ad3b37840f39efc, type: 3}\n  m_Name:\n  m_EditorClassIdentifier:\n  m_Material: {fileID: 0}\n  m_Color: {r: 1, g: 1, b: 1, a: 1}\n  m_RaycastTarget: 1\n  m_RaycastPadding: {x: 0, y: 0, z: 0, w: 0}\n  m_Maskable: 1\n  m_Sprite: {fileID: 21300000, guid: ${spriteGuids[obj.id]}, type: 3}\n  m_Type: 0\n  m_PreserveAspect: 1\n  m_FillCenter: 1\n  m_FillMethod: 4\n  m_FillAmount: 1\n  m_FillClockwise: 1\n  m_FillOrigin: 0\n  m_UseSpriteMesh: 0\n  m_PixelsPerUnitMultiplier: 1\n`;
+    }
+  });
+
+  // 打包
+  folder.file('ExportedAnimation.anim', animYaml);
+  folder.file('ExportedAnimation.anim.meta', `fileFormatVersion: 2\nguid: ${animGuid}\nNativeFormatImporter:\n  externalObjects: {}\n  userData:\n  assetBundleName:\n  assetBundleVariant:\n`);
+  folder.file('AnimatedController.controller', controllerYaml);
+  folder.file('AnimatedController.controller.meta', `fileFormatVersion: 2\nguid: ${controllerGuid}\nNativeFormatImporter:\n  externalObjects: {}\n  userData:\n  assetBundleName:\n  assetBundleVariant:\n`);
+  folder.file('AnimatedCanvas.prefab', prefabYaml);
+  folder.file('AnimatedCanvas.prefab.meta', `fileFormatVersion: 2\nguid: ${prefabGuid}\nNativeFormatImporter:\n  externalObjects: {}\n  userData:\n  assetBundleName:\n  assetBundleVariant:\n`);
+
+  const blob = await zip.generateAsync({ type: 'blob' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = `UnityExport-${Date.now()}.zip`; a.click();
+  URL.revokeObjectURL(url);
+};
+
+// ============================================================
 // Clear Selected Track — 清除選中物件的軌道
 // ============================================================
 document.getElementById('clearSelectedBtn').onclick = () => {
@@ -1732,6 +2011,7 @@ document.getElementById('clearSelectedBtn').onclick = () => {
 const smoothSlider = document.getElementById('smoothSlider');
 const smoothValue = document.getElementById('smoothValue');
 smoothSlider.oninput = () => { smoothValue.textContent = smoothSlider.value; };
+document.getElementById('showKeysCheckbox').onchange = () => { draw(); };
 
 function gaussianSmooth(values, windowSize) {
   // 1D Gaussian smooth，values = array of numbers
@@ -1795,46 +2075,74 @@ function pointLineDistance(p, start, end, dt) {
   return maxD;
 }
 
-function smoothTrack(track, windowSize, epsilon) {
+// Visvalingam-Whyatt 簡化（保持形狀，只刪多餘的 key）
+function visvalingamSimplify(track, keepRatio) {
   if (track.length < 3) return track.slice();
-  // 取出所有數值欄位（除了 t）
   const keys = Object.keys(track[0]).filter(k => k !== 't');
-  // Gaussian smooth 每個欄位
-  const smoothed = track.map(k => ({ ...k }));
-  keys.forEach(key => {
-    const values = track.map(k => k[key]);
-    const sv = gaussianSmooth(values, windowSize);
-    sv.forEach((v, i) => smoothed[i][key] = v);
-  });
-  // RDP 簡化
-  return rdpSimplify(smoothed, epsilon);
+
+  // 計算三角形面積（用所有數值欄位的多維面積）
+  function triArea(i) {
+    if (i <= 0 || i >= points.length - 1) return Infinity;
+    const prev = points[i - 1], cur = points[i], next = points[i + 1];
+    if (!prev || !next) return Infinity;
+    let area = 0;
+    // 用時間軸 + 每個值欄位的面積
+    const dt1 = cur.t - prev.t, dt2 = next.t - cur.t;
+    for (const k of keys) {
+      const v0 = prev[k] || 0, v1 = cur[k] || 0, v2 = next[k] || 0;
+      // 三角形面積 = 0.5 * |dt1*(v2-v0) - (dt1+dt2)*(v1-v0)|
+      area += Math.abs(dt1 * (v2 - v0) - (dt1 + dt2) * (v1 - v0)) * 0.5;
+    }
+    return area;
+  }
+
+  // 複製一份
+  let points = track.map(k => ({ ...k }));
+  const targetCount = Math.max(2, Math.round(points.length * keepRatio));
+
+  while (points.length > targetCount) {
+    // 找面積最小的中間點
+    let minArea = Infinity, minIdx = -1;
+    for (let i = 1; i < points.length - 1; i++) {
+      const a = triArea(i);
+      if (a < minArea) { minArea = a; minIdx = i; }
+    }
+    if (minIdx === -1) break;
+    points.splice(minIdx, 1);
+  }
+  return points;
+}
+
+function smoothTrack(track, strength) {
+  if (track.length < 3) return track.slice();
+  // strength 1~20 → 保留比例 90%~10%
+  const keepRatio = 1 - (strength - 1) / 19 * 0.8; // strength 1=保留90%, 20=保留10%
+  return visvalingamSimplify(track, keepRatio);
 }
 
 document.getElementById('smoothBtn').onclick = () => {
-  // 對所有有軌道的物件做平滑
+  // 對所有有軌道的物件做 key 簡化（保持形狀）
   const hasAny = objects.some(o => o.tracks.translate.length > 0 || o.tracks.rotate.length > 0 || o.tracks.scale.length > 0);
-  if (!hasAny) { alert('沒有任何動畫軌道可平滑'); return; }
+  if (!hasAny) { alert('沒有任何動畫軌道可簡化'); return; }
 
   const strength = parseInt(smoothSlider.value);
-  const windowSize = strength;
-  const epsilon = strength * 0.3;
 
   objects.forEach(obj => {
     if (obj.tracks.translate.length > 2) {
-      obj.tracks.translate = smoothTrack(obj.tracks.translate, windowSize, epsilon);
+      obj.tracks.translate = smoothTrack(obj.tracks.translate, strength);
     }
     if (obj.tracks.rotate.length > 2) {
-      obj.tracks.rotate = smoothTrack(obj.tracks.rotate, windowSize, epsilon * 0.01);
+      obj.tracks.rotate = smoothTrack(obj.tracks.rotate, strength);
     }
     if (obj.tracks.scale.length > 2) {
-      obj.tracks.scale = smoothTrack(obj.tracks.scale, windowSize, epsilon * 0.01);
+      obj.tracks.scale = smoothTrack(obj.tracks.scale, strength);
     }
   });
 
   recomputeMaxDuration();
   renderObjectList();
   draw();
-  snapshot('smooth');
+  snapshot('simplify');
 };
 
 // ============================================================
@@ -1871,6 +2179,7 @@ function updatePropertiesPanel() {
   propSX.value = obj.scaleX.toFixed(2);
   propSY.value = obj.scaleY.toFixed(2);
   document.getElementById('propFontSize').value = obj.fontSize || 12;
+  document.getElementById('showCurve').checked = showCurve;
 
   // Auto animation state
   const auto = obj.autoAnim || {};
@@ -1905,6 +2214,12 @@ document.getElementById('propFontSize').onchange = () => {
   obj.fontSize = Math.max(4, parseInt(document.getElementById('propFontSize').value) || 12);
   draw();
   snapshot('font size');
+};
+
+// Curve 顯示
+document.getElementById('showCurve').onchange = () => {
+  showCurve = document.getElementById('showCurve').checked;
+  draw();
 };
 
 // Auto animation toggles
